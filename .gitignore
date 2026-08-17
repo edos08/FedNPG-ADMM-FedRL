@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Editors
+.idea/
+.vscode/
+.DS_Store
+
+# Experiment outputs — don't commit these, results are big and disposable
+results/
+outputs/
+runs/
+wandb/
+*.log
+
+# Model checkpoints / arrays
+*.pt
+*.pth
+*.ckpt
+*.npy
+*.npz
+
+# Report build artifacts (keep the .tex, ignore compiled junk)
+*.aux
+*.bbl
+*.blg
+*.synctex.gz
+*.fdb_latexmk
+*.fls
+*.out
+
+# Jupyter
+.ipynb_checkpoints/
+
+# MuJoCo / Gymnasium render caches
+*.mp4
+*.gif

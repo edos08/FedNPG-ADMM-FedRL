@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fedrl-comm"
+version = "0.1.0"
+description = "FedNPG-ADMM: communication-efficient federated natural policy gradient — course project reproduction + quantization extension"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Edoardo Scarpel" },
+    { name = "Daniele (surname TBD)" }
+]
+keywords = [
+    "federated-learning",
+    "reinforcement-learning",
+    "natural-policy-gradient",
+    "admm",
+    "quantization",
+    "mujoco"
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "fedrl-common @ file:src/fedrl_comm/common",
+    "fedrl-fednpg-admm @ file:src/fedrl_comm/fednpg_admm",
+    "fedrl-baselines @ file:src/fedrl_comm/baselines",
+    "fedrl-quantization @ file:src/fedrl_comm/quantization",
+    "fedrl-results-webapp @ file:src/fedrl_comm/results_webapp",
+    "fedrl-results-exporter @ file:src/fedrl_comm/results_exporter",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "flake8>=6.0",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Repository = "https://github.com/edos08/FedNPG-ADMM-FedRL"
+Paper = "https://arxiv.org/abs/2310.19807"
+
+[tool.setuptools.packages.find]
+where = ["src"]

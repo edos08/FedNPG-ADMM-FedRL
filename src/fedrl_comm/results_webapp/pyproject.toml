@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fedrl-results-webapp"
+version = "0.1.0"
+description = "Live dashboard for monitoring FedNPG-ADMM / baseline / quantization runs while they train"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+
+dependencies = [
+    "dash>=2.17",
+    "plotly>=5.22",
+    "pandas>=2.2",
+    "fedrl-common>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.scripts]
+fedrl-results-webapp = "results_webapp.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

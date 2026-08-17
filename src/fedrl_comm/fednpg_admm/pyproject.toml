@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fedrl-fednpg-admm"
+version = "0.1.0"
+description = "FedNPG-ADMM: Algorithm 1 from Lan et al. 2023 (arXiv:2310.19807)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+
+dependencies = [
+    "torch>=2.2",
+    "fedrl-common>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.scripts]
+fedrl-train-admm = "fednpg_admm.train:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

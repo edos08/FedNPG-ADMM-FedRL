@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fedrl-results-exporter"
+version = "0.1.0"
+description = "Static tables and camera-ready figures for the written report, generated from run results"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+
+dependencies = [
+    "pandas>=2.2",
+    "matplotlib>=3.8",
+    "fedrl-common>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.scripts]
+fedrl-export-results = "results_exporter.export:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
