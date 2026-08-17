@@ -106,10 +106,9 @@ FedNPG-ADMM-FedRL/
 ## 4. Setup
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/edos08/FedNPG-ADMM-FedRL
 cd FedNPG-ADMM-FedRL
-python -m venv .venv
-source .venv/bin/activate      # Windows: .venv\Scripts\activate
+# Activate your Python venv of choice, then:
 pip install -e .
 ```
 
