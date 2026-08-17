@@ -10,17 +10,17 @@ Course project reproducing and extending:
 > Communication Efficiency in Federated Natural Policy Gradient via
 > ADMM-based Gradient Updates"*, NeurIPS 2023. [arXiv:2310.19807](https://arxiv.org/abs/2310.19807)
 
-Authors: Edoardo Scarpel, Daniele *(surname)* — fill in.
+Authors: Edoardo Scarpel, Daniele Zebele.
 
 ---
 
 ## 1. What the paper actually does
 
 Federated NPG (second-order, better convergence than PG/PPO) requires every
-agent to send its local Hessian `H_i ∈ R^{d×d}` to the server every round —
-`O(d²)` communication. **FedNPG-ADMM** reformulates the global NPG direction
+agent to send its local Hessian $H_i ∈ R^{d×d}$ to the server every round —
+$O(d²)$ communication. **FedNPG-ADMM** reformulates the global NPG direction
 as a distributed quadratic problem solved via ADMM, so agents only ever
-transmit two `d`-dimensional vectors (`y_i`, `g_i`) — `O(d)` communication —
+transmit two $d$-dimensional vectors ($y_i$, $g_i$) — $O(d)$ communication —
 with the *same* convergence rate (Theorem 4.3) and *no* extra sample
 complexity. Empirically validated on Swimmer-v4 / Hopper-v4 / Humanoid-v4
 (MuJoCo).
@@ -35,7 +35,7 @@ Straight from the email, turned into a checklist:
       aggregation). → `fednpg_admm`
 - [ ] **(iii)** *If time allows:* one small state-space instance and one
       large state-space instance, benchmarked against other FedRL methods —
-      at minimum standard-average FedNPG (`O(d²)`, eq. 12 in the paper),
+      at minimum standard-average FedNPG ($O(d²)$, eq. 12 in the paper),
       ideally FedPPO too. → `baselines`
 - [ ] **(iv)** Quantize the agent→server transmissions and study performance
       vs. quantization resolution. **Not in the original paper** — this is
@@ -102,16 +102,6 @@ FedNPG-ADMM-FedRL/
                 ├── tables.py       # LaTeX table generation
                 └── figures.py      # camera-ready plots
 ```
-
-Six independent, pip-installable packages under one root meta-package —
-same monorepo pattern as [BSS-DynamicRebalancing-RL](https://github.com/edos08/BSS-DynamicRebalancing-RL),
-adapted: `common` replaces `gymnasium_env` (we don't need a custom simulator,
-MuJoCo already exists), `benchmark` is renamed `baselines` (it's about
-implementing competing algorithms, not just running comparisons), and
-`quantization` is new — it didn't exist in the old repo because the old
-project didn't have an equivalent "novel contribution" task bolted onto a
-reproduction. Don't lose track of it; it's the one part of this project a
-grader can't just diff against the paper.
 
 ## 4. Setup
 

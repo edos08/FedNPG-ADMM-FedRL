@@ -11,7 +11,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
     { name = "Edoardo Scarpel" },
-    { name = "Daniele (surname TBD)" }
+    { name = "Daniele Zebele" }
 ]
 keywords = [
     "federated-learning",
