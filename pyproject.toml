@@ -30,12 +30,6 @@ classifiers = [
 ]
 
 dependencies = [
-    "fedrl-common @ file:src/fedrl_comm/common",
-    "fedrl-fednpg-admm @ file:src/fedrl_comm/fednpg_admm",
-    "fedrl-baselines @ file:src/fedrl_comm/baselines",
-    "fedrl-quantization @ file:src/fedrl_comm/quantization",
-    "fedrl-results-webapp @ file:src/fedrl_comm/results_webapp",
-    "fedrl-results-exporter @ file:src/fedrl_comm/results_exporter",
 ]
 
 [project.optional-dependencies]
