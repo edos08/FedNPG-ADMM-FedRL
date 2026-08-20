@@ -16,6 +16,7 @@ dependencies = [
     "gymnasium[mujoco]>=1.0.0",
     "matplotlib>=3.8",
     "tqdm>=4.66",
+    "pandas>=2.2",
 ]
 
 [project.optional-dependencies]

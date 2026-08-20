@@ -10,6 +10,7 @@ dist/
 .venv/
 venv/
 env/
+.python-version
 
 # Editors
 .idea/
@@ -18,6 +19,7 @@ env/
 
 # Experiment outputs — don't commit these, results are big and disposable
 results/
+!src/fedrl_comm/common/src/common/results
 outputs/
 runs/
 wandb/
@@ -41,6 +43,9 @@ wandb/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Claude Code
+CLAUDE.md
 
 # MuJoCo / Gymnasium render caches
 *.mp4
