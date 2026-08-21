@@ -30,6 +30,12 @@ classifiers = [
 ]
 
 dependencies = [
+    "fedrl-common",
+    "fedrl-baselines",
+    "fedrl-fednpg-admm",
+    "fedrl-quantization",
+    "fedrl-results-webapp",
+    "fedrl-results-exporter",
 ]
 
 [project.optional-dependencies]
@@ -46,3 +52,6 @@ Paper = "https://arxiv.org/abs/2310.19807"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.yml", "*.yaml", "*.json"]

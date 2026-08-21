@@ -48,12 +48,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--device",
         type=str,
         default="cpu",
-        help=(
-            "torch device: 'cpu', 'mps' (Apple Silicon), or 'cuda:N' (e.g. 'cuda:0'). "
-            "Fails loudly if the requested backend isn't available -- see "
-            "common.device's module docstring for why GPU/MPS isn't automatically "
-            "a speed win for this project's rollout collection specifically."
-        ),
+        help="torch device: 'cpu', 'mps', or 'cuda:N'. See --help output for what's actually available.",
     )
     parser.add_argument(
         "--show-warnings",
@@ -139,9 +134,17 @@ def train(args: argparse.Namespace) -> str:
     )
 
     obs_list = None
-    progress = tqdm(range(1, hp["iterations"] + 1), desc=f"[{run_id}] Training", unit="it")
+    progress = tqdm(range(1, hp["iterations"] + 1), desc=run_id, unit="it")
     for k in progress:
         set_flat_params(policy, theta)  # Algo 1 line 3 (theta half)
+
+        # Diagnostic only, not part of Algorithm 1: log_std is part of theta
+        # (it's an nn.Parameter of `policy`, so NPG steps move it same as
+        # any other weight) -- tracking it exposes exploration/variance
+        # collapse (std shrinking toward 0 with nothing to counteract it,
+        # since Algorithm 1 has no entropy term) as a distinct failure mode
+        # from the ones server_update already guards against.
+        action_std = torch.exp(policy.log_std.detach())
 
         batches, obs_list = collect_rollout_for_agents(
             envs, policy, value_fn, hp["timesteps"], obs_list=obs_list
@@ -211,12 +214,16 @@ def train(args: argparse.Namespace) -> str:
             comm_bytes_this_iteration=comm_bytes_this_iter,
             cumulative_comm_bytes=cumulative_comm_bytes,
             step_skipped=int(step_skipped),
+            mean_action_std=action_std.mean().item(),
+            min_action_std=action_std.min().item(),
+            max_action_std=action_std.max().item(),
         )
 
         progress.set_postfix(
             {
                 "ep_ret": f"{mean_episode_return:.3f}" if all_episode_returns else "n/a",
                 "critic_loss": f"{critic_losses[-1]:.3f}",
+                "action_std": f"{action_std.mean().item():.3f}",
                 "comm_MB": f"{cumulative_comm_bytes / 1e6:.2f}",
             }
         )

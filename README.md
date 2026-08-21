@@ -109,11 +109,22 @@ FedNPG-ADMM-FedRL/
 git clone https://github.com/edos08/FedNPG-ADMM-FedRL
 cd FedNPG-ADMM-FedRL
 # Activate your Python venv of choice, then:
-pip install -e .
+pip install -e . \
+  -e src/fedrl_comm/common \
+  -e src/fedrl_comm/baselines \
+  -e src/fedrl_comm/fednpg_admm \
+  -e src/fedrl_comm/quantization \
+  -e src/fedrl_comm/results_webapp \
+  -e src/fedrl_comm/results_exporter
 ```
 
-`pip install -e .` at the root installs all six packages in editable mode in
-one shot (see root `pyproject.toml`).
+The root `fedrl-comm` package (see root `pyproject.toml`) depends on all six
+sub-packages by name, but those names aren't published anywhere — they only
+resolve because every sub-package's local path is *also* passed with `-e` in
+this same `pip install` invocation, so pip's resolver satisfies each
+dependency from the local editable candidate instead of trying (and failing)
+to fetch it from PyPI. **`pip install -e .` alone will NOT work** — it needs
+every `-e <path>` above in the same command.
 
 Verify install:
 

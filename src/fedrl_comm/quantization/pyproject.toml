@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 
 dependencies = [
     "numpy>=1.26",
-    "torch>=2.2",
+    "torch==2.4.1",
     "fedrl-common>=0.1.0",
 ]
 
