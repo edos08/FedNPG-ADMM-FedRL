@@ -46,6 +46,8 @@ wandb/
 
 # Claude Code
 CLAUDE.md
+.claude/
+settings.local.json
 
 # MuJoCo / Gymnasium render caches
 *.mp4

@@ -9,6 +9,7 @@ iteration shows up without restarting the dashboard.
 from __future__ import annotations
 
 import argparse
+import logging
 from datetime import datetime
 
 import dash
@@ -160,6 +161,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8050)
     parser.add_argument("--host", type=str, default="127.0.0.1")
     args = parser.parse_args()
+
+    # Werkzeug's dev server logs every request at INFO -- with the dashboard
+    # polling every REFRESH_INTERVAL_MS, that's a line spammed every 3s per
+    # open tab. Only startup/error messages are worth seeing here.
+    logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
     app = build_app(args.results_path)
     app.run(host=args.host, port=args.port, debug=False)

@@ -107,11 +107,17 @@ def train(args: argparse.Namespace) -> str:
     hp = resolve_hyperparams(args)
     spec = get_env_spec(args.env)
 
+    # Create an env for each agent
     envs = make_envs_for_agents(args.env, args.num_agents, base_seed=args.seed)
+
+    # Create Actor (shared policy)
     policy = GaussianMLPPolicy.from_env(envs[0], hidden_sizes=spec.hidden_sizes).to(device)
+
+    # Create Critic (using GAE) with optimizer
     value_fn = ValueMLP.from_env(envs[0], hidden_sizes=spec.hidden_sizes).to(device)
     value_optimizer = torch.optim.Adam(value_fn.parameters(), lr=hp["critic_lr"])
 
+    # ADMM state: theta, y, and per-agent dual variables y_i, g_i
     d = num_params(policy)
     theta = get_flat_params(policy)  # already on `device` -- policy was moved there first
     y_global = torch.zeros(d, device=device)
@@ -134,7 +140,7 @@ def train(args: argparse.Namespace) -> str:
     )
 
     obs_list = None
-    progress = tqdm(range(1, hp["iterations"] + 1), desc=run_id, unit="it")
+    progress = tqdm(range(1, hp["iterations"] + 1), desc=run_id, unit="it", dynamic_ncols=True)
     for k in progress:
         set_flat_params(policy, theta)  # Algo 1 line 3 (theta half)
 
@@ -221,10 +227,7 @@ def train(args: argparse.Namespace) -> str:
 
         progress.set_postfix(
             {
-                "ep_ret": f"{mean_episode_return:.3f}" if all_episode_returns else "n/a",
-                "critic_loss": f"{critic_losses[-1]:.3f}",
-                "action_std": f"{action_std.mean().item():.3f}",
-                "comm_MB": f"{cumulative_comm_bytes / 1e6:.2f}",
+                "ep_ret": f"{mean_episode_return:.3f}" if all_episode_returns else "n/a"
             }
         )
 
