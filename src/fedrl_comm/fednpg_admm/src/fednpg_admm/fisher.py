@@ -36,7 +36,12 @@ def kl_divergence_loss(policy: GaussianMLPPolicy, obs: torch.Tensor) -> torch.Te
     """
     with torch.no_grad():
         old_mean = policy.mean(obs)
-        old_std = torch.exp(policy.log_std)
+        # policy.std(), not raw exp(log_std): old_dist must be numerically
+        # identical to policy.distribution(obs) below for the KL-Hessian ==
+        # Fisher identity to hold. Once log_std drifts below log_std_min,
+        # distribution() uses the floored std -- old_std has to match or KL
+        # stops being exactly 0 at this point and the FVP is wrong.
+        old_std = policy.std()
     old_dist = Independent(Normal(old_mean, old_std), 1)
     new_dist = policy.distribution(obs)
     return kl_divergence(old_dist, new_dist).mean()

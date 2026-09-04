@@ -81,6 +81,32 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gae-lambda", type=float, default=None)
     parser.add_argument("--critic-lr", type=float, default=None)
     parser.add_argument("--eta", type=float, default=None)
+    parser.add_argument(
+        "--log-std-min",
+        type=float,
+        default=None,
+        help=(
+            "Floor on the policy's log_std (default: GaussianMLPPolicy's own default, "
+            "-2.0 -- std ~0.135). NOT from the paper: Algorithm 1 has no entropy term "
+            "or bounds, and log_std is part of theta, so the NPG/ADMM step is free to "
+            "drive it toward -inf with nothing to stop it (observed with num_agents=8, "
+            "where ADMM averaging smooths out single-round noise into a slow, "
+            "one-directional collapse) -- see docs/npg_admm_theory_and_implementation.md."
+        ),
+    )
+    parser.add_argument(
+        "--log-std-max",
+        type=float,
+        default=None,
+        help=(
+            "Ceiling on the policy's log_std (default: GaussianMLPPolicy's own default, "
+            "0.5 -- std ~1.65). Same missing-bound problem as --log-std-min but in the "
+            "other direction -- observed with num_agents=1 (no cross-agent averaging to "
+            "cancel a noisy round): log_std for one action dim ran away upward, reward "
+            "collapsed into noise and never recovered. See "
+            "docs/npg_admm_theory_and_implementation.md."
+        ),
+    )
     return parser
 
 
@@ -111,7 +137,12 @@ def train(args: argparse.Namespace) -> str:
     envs = make_envs_for_agents(args.env, args.num_agents, base_seed=args.seed)
 
     # Create Actor (shared policy)
-    policy = GaussianMLPPolicy.from_env(envs[0], hidden_sizes=spec.hidden_sizes).to(device)
+    policy_kwargs = {}
+    if args.log_std_min is not None:
+        policy_kwargs["log_std_min"] = args.log_std_min
+    if args.log_std_max is not None:
+        policy_kwargs["log_std_max"] = args.log_std_max
+    policy = GaussianMLPPolicy.from_env(envs[0], hidden_sizes=spec.hidden_sizes, **policy_kwargs).to(device)
 
     # Create Critic (using GAE) with optimizer
     value_fn = ValueMLP.from_env(envs[0], hidden_sizes=spec.hidden_sizes).to(device)
@@ -149,8 +180,12 @@ def train(args: argparse.Namespace) -> str:
         # any other weight) -- tracking it exposes exploration/variance
         # collapse (std shrinking toward 0 with nothing to counteract it,
         # since Algorithm 1 has no entropy term) as a distinct failure mode
-        # from the ones server_update already guards against.
-        action_std = torch.exp(policy.log_std.detach())
+        # from the ones server_update already guards against. Uses
+        # policy.std() (not raw log_std) so this reflects the EFFECTIVE,
+        # floored std actually used for sampling -- see policy.py's
+        # log_std_min docstring.
+        with torch.no_grad():
+            action_std = policy.std()
 
         batches, obs_list = collect_rollout_for_agents(
             envs, policy, value_fn, hp["timesteps"], obs_list=obs_list

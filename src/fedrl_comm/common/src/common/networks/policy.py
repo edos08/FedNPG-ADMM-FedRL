@@ -35,6 +35,8 @@ class GaussianMLPPolicy(nn.Module):
         activation: type[nn.Module] = nn.ReLU,
         output_activation: type[nn.Module] = nn.Tanh,
         log_std_init: float = -0.5,
+        log_std_min: float = -2.0,
+        log_std_max: float = 0.5,
         action_low: torch.Tensor | float = -1.0,
         action_high: torch.Tensor | float = 1.0,
     ) -> None:
@@ -57,6 +59,30 @@ class GaussianMLPPolicy(nn.Module):
         # tune, not a transcription of the paper.
         self.log_std = nn.Parameter(torch.full((act_dim,), float(log_std_init)))
 
+        # log_std is part of theta, so Algorithm 1's NPG/ADMM step moves it
+        # exactly like any mean-network weight -- and Algorithm 1 has no
+        # entropy term or bounds to counteract that. Empirically (see
+        # docs/npg_admm_theory_and_implementation.md, swimmer diagnostics)
+        # this is unstable in BOTH directions, not just collapse-to-zero:
+        # with num_agents=8, log_std shrinks monotonically (ADMM's average
+        # over 8 agents' y_i smooths out any single noisy round); with
+        # num_agents=1 (no averaging to cancel a bad round), log_std for one
+        # action dim instead RAN AWAY UPWARD around iteration ~110-160
+        # (std 0.6 -> 7+), coinciding exactly with reward collapsing into
+        # noise and never recovering -- once one action's noise gets large
+        # enough to be dominated by env-bound clipping, that dimension's
+        # advantage signal becomes uninformative, so the next round's log_std
+        # gradient is just as likely to push further up as back down: a
+        # one-sided runaway with nothing to stop it. log_std_min/log_std_max
+        # floor and ceiling the EFFECTIVE std used for sampling/log_prob (via
+        # `std()`/`distribution()`); the raw parameter can still be pushed
+        # past either bound, but the clamp's zero gradient there stops the
+        # ADMM step from having any further effect once it does. Neither
+        # bound is in the paper -- this project's fix for a failure mode
+        # Algorithm 1 doesn't guard against in either direction.
+        self.log_std_min = float(log_std_min)
+        self.log_std_max = float(log_std_max)
+
         low = torch.as_tensor(action_low, dtype=torch.float32)
         high = torch.as_tensor(action_high, dtype=torch.float32)
         self.register_buffer("_action_center", (high + low) / 2.0)
@@ -66,9 +92,13 @@ class GaussianMLPPolicy(nn.Module):
         squashed = self.mean_net(obs)
         return self._action_center + self._action_scale * squashed
 
+    def std(self) -> torch.Tensor:
+        """Effective per-dim action std: exp(log_std), clamped to [log_std_min, log_std_max]."""
+        return torch.exp(self.log_std.clamp(min=self.log_std_min, max=self.log_std_max))
+
     def distribution(self, obs: torch.Tensor) -> Independent:
         mean = self.mean(obs)
-        std = torch.exp(self.log_std).expand_as(mean)
+        std = self.std().expand_as(mean)
         return Independent(Normal(mean, std), 1)
 
     def sample(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
