@@ -9,6 +9,7 @@ doesn't fit.
 """
 
 from .reader import RunResult, load_run, load_runs
+from .smoothing import trailing_episode_mean
 from .writer import ResultsWriter
 
-__all__ = ["ResultsWriter", "RunResult", "load_run", "load_runs"]
+__all__ = ["ResultsWriter", "RunResult", "load_run", "load_runs", "trailing_episode_mean"]

@@ -52,3 +52,6 @@ settings.local.json
 # MuJoCo / Gymnasium render caches
 *.mp4
 *.gif
+
+# Stray archives (a 10 MB claude.zip was committed once by accident)
+*.zip

@@ -14,6 +14,30 @@ import torch
 import torch.nn as nn
 
 
+def orthogonal_init_(net: nn.Module, hidden_gain: float, head_gain: float) -> None:
+    """
+    Orthogonal weight init applied in place, with a separate gain for the
+    FINAL nn.Linear ("head") vs every earlier one ("hidden"), biases
+    zeroed throughout.
+
+    This is the scheme stable-baselines3's ActorCriticPolicy applies by
+    default (`ortho_init=True`): gain sqrt(2) on hidden layers, 0.01 on the
+    action head, 1.0 on the value head. The paper's Table 4 specifies layer
+    sizes and activations but says nothing about initialization; its Setup
+    section cites stable-baselines3's practical settings, and this is one of
+    them. Worth keeping in mind that PyTorch's default (Kaiming-uniform,
+    what this codebase used before) is a genuinely different starting point,
+    not a neutral one -- particularly for the policy, where a Kaiming-scale
+    head feeding a Tanh can begin training already near saturation.
+    """
+    linears = [m for m in net.modules() if isinstance(m, nn.Linear)]
+    for i, layer in enumerate(linears):
+        gain = head_gain if i == len(linears) - 1 else hidden_gain
+        nn.init.orthogonal_(layer.weight, gain=gain)
+        if layer.bias is not None:
+            nn.init.zeros_(layer.bias)
+
+
 def num_params(module: nn.Module) -> int:
     return sum(p.numel() for p in module.parameters())
 

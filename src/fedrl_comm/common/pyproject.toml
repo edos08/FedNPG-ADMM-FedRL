@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 
 dependencies = [
     "numpy>=1.26",
-    "torch==2.4.1",
+    "torch==2.11.0",
     "gymnasium[mujoco]>=1.0.0",
     "matplotlib>=3.8",
     "tqdm>=4.66",

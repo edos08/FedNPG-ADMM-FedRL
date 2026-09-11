@@ -34,6 +34,11 @@ class ResultsWriter:
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
         self.metadata_path.write_text(json.dumps(full_metadata, indent=2))
+        # A fresh ResultsWriter means a fresh run: drop any metrics.csv left
+        # over from a prior run under this same run_id, or log_iteration's
+        # append-mode writes would pile new rows under stale ones (or raise
+        # a ragged-columns error if the two runs logged different metrics).
+        self.metrics_path.unlink(missing_ok=True)
         self._fieldnames: "list[str] | None" = None
 
     def log_iteration(self, iteration: int, **metrics) -> None:

@@ -6,7 +6,7 @@ package trains on.
 
 from .buffer import RolloutBatch
 from .collector import collect_rollout, collect_rollout_for_agents
-from .gae import compute_episode_returns, compute_gae, fit_value_function
+from .gae import compute_episode_returns, compute_gae, explained_variance, fit_value_function, normalize_advantages
 
 __all__ = [
     "RolloutBatch",
@@ -14,5 +14,7 @@ __all__ = [
     "collect_rollout_for_agents",
     "compute_episode_returns",
     "compute_gae",
+    "explained_variance",
     "fit_value_function",
+    "normalize_advantages",
 ]

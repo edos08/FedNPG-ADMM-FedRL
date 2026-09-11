@@ -8,9 +8,13 @@ build a matching policy network via GaussianMLPPolicy.from_env().
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 
 import gymnasium as gym
+from gymnasium.vector import AsyncVectorEnv, AutoresetMode
+
+from .normalize import NormalizingVectorEnv, RunningMeanStd
 
 
 @dataclass(frozen=True)
@@ -92,3 +96,41 @@ def make_envs_for_agents(
     policy, with no state shared between the instances.
     """
     return [make_env(name_or_gym_id, seed=base_seed + i, **gym_kwargs) for i in range(num_agents)]
+
+
+def make_vector_env_for_agents(
+    name_or_gym_id: str,
+    num_agents: int,
+    base_seed: int = 0,
+    **gym_kwargs,
+) -> AsyncVectorEnv:
+    """
+    Same per-agent envs as make_envs_for_agents, but stepped in `num_agents`
+    separate OS subprocesses via Gymnasium's AsyncVectorEnv instead of one
+    Python process looping over them one at a time -- lets every agent's
+    MuJoCo physics step run on its own CPU core in parallel, and lets
+    common.rollout.collect_rollout_for_agents batch the policy/critic
+    forward pass to size `num_agents` per timestep instead of one agent at
+    a time.
+
+    autoreset_mode=SAME_STEP is required, not just convenient. It's what
+    makes a sub-env's step() return the POST-reset observation immediately
+    on a boundary (matching make_env's single-env behavior: no step is
+    ever wasted on a dummy reset transition), while still exposing the
+    TRUE pre-reset observation via info["final_obs"] for GAE's
+    bootstrap-value calculation. The NEXT_STEP default instead returns the
+    real terminal observation on the boundary step and defers the actual
+    reset to a following all-zero-reward dummy step -- using that here
+    would silently shrink every agent's per-iteration transition count
+    below num_steps.
+
+    Each factory seeds its own env at construction time exactly like
+    make_env does (base_seed + i) -- functools.partial over the
+    module-level make_env, not a closure/lambda, so factories stay
+    picklable regardless of the multiprocessing start method in use.
+    """
+    env_fns = [
+        functools.partial(make_env, name_or_gym_id, seed=base_seed + i, **gym_kwargs)
+        for i in range(num_agents)
+    ]
+    return AsyncVectorEnv(env_fns, autoreset_mode=AutoresetMode.SAME_STEP)

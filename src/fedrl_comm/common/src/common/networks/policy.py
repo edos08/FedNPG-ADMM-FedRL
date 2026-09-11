@@ -17,6 +17,8 @@ import torch
 import torch.nn as nn
 from torch.distributions import Independent, Normal
 
+from .utils import orthogonal_init_
+
 
 class GaussianMLPPolicy(nn.Module):
     """
@@ -39,6 +41,7 @@ class GaussianMLPPolicy(nn.Module):
         log_std_max: float = 0.5,
         action_low: torch.Tensor | float = -1.0,
         action_high: torch.Tensor | float = 1.0,
+        ortho_init: bool = True,
     ) -> None:
         super().__init__()
         self.obs_dim = obs_dim
@@ -51,6 +54,21 @@ class GaussianMLPPolicy(nn.Module):
             last = h
         layers += [nn.Linear(last, act_dim), output_activation()]
         self.mean_net = nn.Sequential(*layers)
+
+        if ortho_init:
+            # Orthogonal initialization, matching stable-baselines3's
+            # ActorCriticPolicy (ortho_init=True by default there): gain
+            # sqrt(2) on hidden layers, 0.01 on the action head, biases
+            # zeroed. NOT specified by the paper -- Table 4 covers layer
+            # sizes and activations only -- but the Setup section cites
+            # stable-baselines3's practical settings, and this is one of
+            # them. The 0.01 action-head gain is the load-bearing part: it
+            # makes the initial mean action near-zero, whereas PyTorch's
+            # default Kaiming-uniform init (what this used to do) pushes
+            # Kaiming-scale outputs straight into the Tanh below, which can
+            # start training already near saturation -- worse the larger
+            # the net gets (Hopper's 128x128, Humanoid's 512x512x512).
+            orthogonal_init_(self.mean_net, hidden_gain=2.0**0.5, head_gain=0.01)
 
         # State-independent log std, one per action dim. -0.5 is a common
         # TRPO-style default (std ~ 0.6) — it is NOT specified in the
