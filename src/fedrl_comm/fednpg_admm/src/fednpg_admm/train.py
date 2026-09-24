@@ -24,6 +24,7 @@ import random
 import warnings
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -32,6 +33,7 @@ from tqdm import tqdm
 from common.comms import make_channels_for_agents
 from common.device import resolve_device
 from common.envs import NormalizingVectorEnv, get_env_spec, make_env, make_vector_env_for_agents
+from common.evaluation import evaluate_policy, save_checkpoint
 from common.networks import GaussianMLPPolicy, ValueMLP, get_flat_params, num_params, set_flat_params
 from common.results import ResultsWriter
 from common.rollout import (
@@ -43,7 +45,7 @@ from common.rollout import (
     normalize_advantages,
 )
 
-from .agent import AgentState, compute_local_gradient, local_admm_solve
+from .agent import AgentState, agent_update
 from .hyperparams import DEFAULT_HYPERPARAMS
 from .server import compute_candidate_step, line_search_step
 
@@ -56,30 +58,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--results-path", type=str, default="results")
     parser.add_argument("--run-id", type=str, default=None)
     parser.add_argument("--cg-iters", type=int, default=10)
-    parser.add_argument(
-        "--admm-rounds",
-        type=int,
-        default=1,
-        help=(
-            "ADMM rounds (Algorithm 1 lines 6+8) per POLICY iteration, on the "
-            "same rollout batch, re-broadcasting y = mean_i(y_i) between rounds. "
-            "Default 1 == Algorithm 1 exactly as written, and is what you want; "
-            "R is not a Table 4 quantity, the pseudocode just happens to use one "
-            "round and warm-start y^{k-1}/lambda_i across iterations.\n\n"
-            "R>1 raises consensus but did NOT improve returns. Measured on "
-            "Hopper num_agents=8 (single seed): at R=1 the agents' y_i stay "
-            "mutually near-orthogonal (consensus_cos ~0.05) while R=5 reaches "
-            "~0.76 early -- yet R=5 scored WORSE from iteration 50 onward "
-            "(~1426 vs ~1827 trailing return at iteration 536). An exact pooled "
-            "solve, which has zero consensus error, also landed within noise of "
-            "R=1. So consensus quality is NOT what limits num_agents=8 here, and "
-            "raising R is not a fix -- it is kept because it's the knob that "
-            "demonstrates that decoupling, and because R=5's consensus itself "
-            "decays back to ~0.02 late in training as agents' gradients "
-            "decorrelate. Cost is R uplinks of y_i per iteration, O(R*d); the "
-            "byte meter counts every round, so comm comparisons stay honest."
-        ),
-    )
     parser.add_argument(
         "--critic-epochs",
         type=int,
@@ -146,6 +124,48 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    parser.add_argument(
+        "--advantage-normalization-scope",
+        choices=["per-agent", "pooled"],
+        default="per-agent",
+        help=(
+            "Whether each agent normalizes its OWN advantages (default, what "
+            "this project has always done) or all agents share one mean/std "
+            "computed over the pooled batch. Not a Table 4 quantity -- the "
+            "paper never mentions advantage normalization -- so this is "
+            "entirely an implementation choice.\n\n"
+            "Why it may matter at num_agents > 1: per-agent scaling divides "
+            "each g_i by its own batch's advantage std, so an agent whose "
+            "rollout carried strong signal and one whose rollout was flat "
+            "both contribute unit-scale gradients, and Algorithm 1 line 13's "
+            "sum_i g_i weights them equally regardless of how informative "
+            "they were. At num_agents=1 this is a single global rescale that "
+            "the trust-region step size absorbs, which is exactly why it has "
+            "been invisible until now. 'pooled' keeps the relative weighting "
+            "between agents intact and matches stable-baselines3, which "
+            "normalizes across the whole rollout buffer."
+        ),
+    )
+    parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=0,
+        help="Run deterministic evaluation every N iterations (0 = off). Uses the "
+        "MEAN action with no exploration noise on a SEPARATE env, and reports raw "
+        "un-normalized returns -- the quantity published benchmarks report. The "
+        "always-logged ep_rew_mean is instead the stochastic on-policy training "
+        "return, which on Hopper is systematically lower because the exploration "
+        "noise is what makes it fall over.",
+    )
+    parser.add_argument("--eval-episodes", type=int, default=10)
+    parser.add_argument(
+        "--save-checkpoint",
+        action="store_true",
+        help="Write policy/critic/obs-normalizer to <results>/<run_id>/checkpoint.pt "
+        "at the end, plus best.pt whenever deterministic eval improves. Without this "
+        "a finished run cannot be re-evaluated, replayed or rendered afterwards.",
+    )
+
     # Everything below defaults from the paper's Table 4 (see hyperparams.py)
     # for --env, but can be overridden -- e.g. for a quick smoke test.
     parser.add_argument("--iterations", type=int, default=None)
@@ -156,6 +176,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gae-lambda", type=float, default=None)
     parser.add_argument("--critic-lr", type=float, default=None)
     parser.add_argument("--eta", type=float, default=None)
+    parser.add_argument(
+        "--log-std-init",
+        type=float,
+        default=None,
+        help="Initial log std (default -0.5, std ~0.61 -- tianshou's and Spinning Up's "
+        "value; SB3/baselines/CleanRL use 0.0, std 1.0). Not in Table 4. Andrychowicz "
+        "et al. 2020 (arXiv:2006.05990) find initial action std ~0.5 best on most "
+        "MuJoCo envs but explicitly note HOPPER prefers higher values.",
+    )
     parser.add_argument(
         "--log-std-min",
         type=float,
@@ -318,6 +347,8 @@ def train(args: argparse.Namespace) -> str:
 
     # Create Actor (shared policy)
     policy_kwargs = {"ortho_init": args.ortho_init}
+    if args.log_std_init is not None:
+        policy_kwargs["log_std_init"] = args.log_std_init
     if args.log_std_min is not None:
         policy_kwargs["log_std_min"] = args.log_std_min
     if args.log_std_max is not None:
@@ -341,7 +372,20 @@ def train(args: argparse.Namespace) -> str:
             normalize_obs=args.normalize_obs,
             normalize_reward=args.normalize_reward,
         )
+    # None when obs normalization is off -- evaluate_policy then feeds raw
+    # observations, which is correct for a policy trained on raw ones.
+    obs_normalizer = getattr(vector_env, "obs_rms", None) if args.normalize_obs else None
+
     value_optimizer = torch.optim.Adam(value_fn.parameters(), lr=hp["critic_lr"])
+
+    # Separate env for deterministic evaluation -- never the training env:
+    # sharing it would corrupt the running normalizer state mid-iteration,
+    # and its reward normalization would make the number incomparable to
+    # published benchmarks. Offset seed so eval episodes aren't the same
+    # trajectories the agents just trained on.
+    eval_env = make_env(args.env, seed=args.seed + 10_000) if args.eval_interval > 0 else None
+    best_eval_return = float("-inf")
+
 
     # ADMM state: theta, y, and per-agent dual variables y_i, g_i
     d = num_params(policy)
@@ -364,6 +408,9 @@ def train(args: argparse.Namespace) -> str:
     episode_return_window: deque[float] = deque(maxlen=args.stats_window_size)
 
     run_id = args.run_id or f"fednpg_admm_{args.env}_{args.num_agents}agents_{datetime.now():%Y%m%d_%H%M%S}"
+    # after run_id: an auto-generated id must land in its own directory,
+    # not the results root.
+    checkpoint_dir = Path(args.results_path) / run_id
     writer = ResultsWriter(
         args.results_path,
         run_id=run_id,
@@ -375,17 +422,20 @@ def train(args: argparse.Namespace) -> str:
             "seed": args.seed,
             "device": str(device),
             "ortho_init": args.ortho_init,
+            "eval_interval": args.eval_interval,
+            "eval_episodes": args.eval_episodes,
             # The EFFECTIVE clamp, read off the policy rather than off args
             # (which are None when not overridden) -- these bounds change
             # training materially and were previously unrecorded, so a run's
             # results couldn't be attributed to them after the fact.
+            "log_std_init": float(policy.log_std.detach().mean()),
             "log_std_min": policy.log_std_min,
             "log_std_max": policy.log_std_max,
             "normalize_obs": args.normalize_obs,
             "normalize_reward": args.normalize_reward,
             "advantage_normalization": args.advantage_normalization,
+            "advantage_normalization_scope": args.advantage_normalization_scope,
             "cg_iters": args.cg_iters,
-            "admm_rounds": args.admm_rounds,
             "line_search": args.line_search,
             "line_search_max_backtracks": args.line_search_max_backtracks,
             "line_search_backtrack_coeff": args.line_search_backtrack_coeff,
@@ -422,8 +472,18 @@ def train(args: argparse.Namespace) -> str:
         # last_value bookkeeping needed here; see gae.py's docstring.
         for batch in batches:
             compute_gae(batch, gamma=hp["gamma"], lam=hp["gae_lambda"])
-            if args.advantage_normalization:
-                normalize_advantages(batch)
+        if args.advantage_normalization:
+            if args.advantage_normalization_scope == "pooled":
+                # One mean/std over every agent's advantages at once, so the
+                # RELATIVE magnitude between agents survives into sum_i g_i.
+                # See --advantage-normalization-scope.
+                pooled = torch.cat([b.advantages for b in batches])
+                mean, std = pooled.mean(), pooled.std()
+                for b in batches:
+                    b.advantages = (b.advantages - mean) / (std + 1e-8)
+            else:
+                for batch in batches:
+                    normalize_advantages(batch)
 
         # Critic: pooled across all agents' data. The paper does not
         # describe how the critic is trained federatedly at all -- pooling
@@ -443,34 +503,15 @@ def train(args: argparse.Namespace) -> str:
             epochs=args.critic_epochs, batch_size=args.critic_batch_size,
         )
 
-        # Algo 1 lines 5-9, per agent. g_i and the (H_i + rho*I) operator
-        # depend only on (theta, that agent's batch), both fixed for this
-        # whole iteration, so they're computed ONCE and reused across every
-        # ADMM round -- only lines 6 and 8 repeat. g_i is likewise uplinked
-        # once per iteration, not once per round: it doesn't change, so
-        # charging the channel for re-sending it would overstate the cost.
-        local_grads, local_avps = [], []
-        for batch, channel in zip(batches, channels):
-            g_i, Avp = compute_local_gradient(policy, batch, rho=hp["rho"])
-            local_grads.append(channel.send("g_i", g_i, iteration=k))
-            local_avps.append(Avp)
-
-        # R rounds of consensus ADMM. R=1 (the default) is Algorithm 1
-        # literally: one solve against the y^{k-1} the server broadcast at
-        # the top of this iteration. R>1 re-broadcasts the freshly averaged
-        # y between rounds, which is what actually drives the y_i toward
-        # consensus -- see --admm-rounds for the measurements motivating it.
-        y_round = y_global
-        for _round in range(args.admm_rounds):
-            y_list = []
-            for i, (channel, Avp) in enumerate(zip(channels, local_avps)):
-                y_i, agent_states[i] = local_admm_solve(
-                    Avp, local_grads[i], agent_states[i],
-                    y_prev=y_round, rho=hp["rho"], cg_iters=args.cg_iters,
-                )
-                y_list.append(channel.send("y_i", y_i, iteration=k))
-            y_round = torch.stack(y_list).mean(dim=0)
-        g_list = local_grads
+        # Algo 1 lines 5-9, per agent.
+        y_list, g_list = [], []
+        for i, (batch, channel) in enumerate(zip(batches, channels)):
+            y_i, g_i, agent_states[i] = agent_update(
+                policy, batch, agent_states[i], y_prev=y_global,
+                rho=hp["rho"], cg_iters=args.cg_iters,
+            )
+            y_list.append(channel.send("y_i", y_i, iteration=k))
+            g_list.append(channel.send("g_i", g_i, iteration=k))
 
         # Consensus health, free to compute (no Fisher products): if the
         # agents' y_i are mutually near-orthogonal, their mean is short and
@@ -581,6 +622,29 @@ def train(args: argparse.Namespace) -> str:
         comm_bytes_this_iter = sum(ch.meter.bytes_by_iteration().get(k, 0.0) for ch in channels)
         cumulative_comm_bytes = sum(ch.meter.total_bytes for ch in channels)
 
+        # Deterministic evaluation. The keys are logged on EVERY iteration
+        # (NaN when this isn't an eval step) because log_iteration fixes the
+        # CSV columns on its first call and rejects a changed key set.
+        eval_metrics = {
+            "eval_ep_rew_mean": float("nan"),
+            "eval_ep_rew_std": float("nan"),
+            "eval_ep_len_mean": float("nan"),
+        }
+        if eval_env is not None and (k % args.eval_interval == 0 or k == hp["iterations"]):
+            set_flat_params(policy, theta)
+            result = evaluate_policy(
+                policy, eval_env, num_episodes=args.eval_episodes,
+                obs_rms=obs_normalizer, device=device,
+            )
+            eval_metrics = result.as_metrics
+            progress.set_postfix({"eval": f"{result.mean_return:.0f}"})
+            if args.save_checkpoint and result.mean_return > best_eval_return:
+                best_eval_return = result.mean_return
+                save_checkpoint(
+                    checkpoint_dir / "best.pt", policy, value_fn, obs_normalizer,
+                    extra={"iteration": k, "eval_return": result.mean_return},
+                )
+
         writer.log_iteration(
             k,
             mean_reward=mean_rewards.mean().item(),
@@ -599,6 +663,7 @@ def train(args: argparse.Namespace) -> str:
             closed_form_step_size=closed_form_step,
             consensus_cos=consensus_cos,
             consensus_spread=consensus_spread,
+            **eval_metrics,
             mean_action_std=action_std.mean().item(),
             min_action_std=action_std.min().item(),
             max_action_std=action_std.max().item(),
@@ -610,8 +675,15 @@ def train(args: argparse.Namespace) -> str:
             }
         )
 
+    if args.save_checkpoint:
+        save_checkpoint(
+            checkpoint_dir / "checkpoint.pt", policy, value_fn, obs_normalizer,
+            extra={"iteration": hp["iterations"], "ep_rew_mean": ep_rew_mean},
+        )
     writer.finalize(final_mean_reward=mean_rewards.mean().item())
     vector_env.close()
+    if eval_env is not None:
+        eval_env.close()
     return run_id
 
 

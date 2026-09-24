@@ -9,14 +9,9 @@ import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from dash import html
 
-from common.results import RunResult, trailing_episode_mean
+from common.results import RunResult
 
 _TEMPLATE = "plotly_white"
-
-# Episodes (not iterations) behind each smoothed point -- stable-baselines3's
-# stats_window_size default. See common.results.smoothing.
-_REWARD_WINDOW_EPISODES = 100
-
 
 def _empty_figure(message: str) -> go.Figure:
     fig = go.Figure()
@@ -30,32 +25,26 @@ def _empty_figure(message: str) -> go.Figure:
 
 def build_reward_figure(runs: dict[str, RunResult]) -> go.Figure:
     """
-    Plots mean_episode_return, NOT mean_reward -- the latter is a
-    per-TIMESTEP average and isn't comparable to the paper's Fig. 2 (whose
-    y-axis is per-episode totals). mean_episode_return can be NaN on
-    iterations where no agent completed a full episode within the
-    timestep budget; Plotly draws a gap there rather than a fake zero,
-    which is the honest behavior -- don't fill it in.
+    ONE trace per run: `mean_episode_return` vs iteration, raw.
 
-    No shaded variance band here (unlike the old per-step version): that
-    would need a per-agent breakdown of episode returns, which isn't
-    logged (only the pooled mean across all agents' completed episodes
-    is) -- faking a spread from data that isn't there would be worse than
-    just not drawing one.
+    This is deliberately the paper's own metric and nothing else. Section 5
+    defines its reward as "the average trajectory rewards across the batch
+    collected at each iteration", plotted against iterations, so this chart
+    is directly comparable to Figure 2 and Table 2.
 
-    Draws TWO traces per run: the raw per-iteration value as a faint thin
-    line, and a trailing 100-EPISODE mean as the bold one. The bold line
-    is the number worth reading -- `mean_episode_return` averages only the
-    episodes that finished inside one iteration's timestep budget, a count
-    that collapses to 1-2 on Hopper once episodes get long, so its swings
-    are a sample-size artifact rather than training instability (see
-    common.results.smoothing). The raw trace stays visible on purpose:
-    smoothing here is the correct aggregation, not a way to hide anything.
+    Earlier versions layered a trailing-100-episode curve, a deterministic
+    evaluation curve and a seed-averaged mean over this. All three made the
+    line look calmer without making the agent any better, which is the
+    opposite of useful while the swing itself is the open problem: on
+    Hopper at num_agents=1 roughly 9% of episodes end in an early fall and
+    each plotted point is ~1.2 episodes, so the swing between ~1000 and
+    ~3700 is real behaviour that needs fixing, not smoothing. Those columns
+    are still logged in metrics.csv for anyone who wants them; they just
+    don't belong on this chart.
 
-    Prefers the `ep_rew_mean` column when a run logged it directly, and
-    otherwise reconstructs the identical quantity from
-    mean_episode_return x num_completed_episodes -- so runs started before
-    that column existed still get a smoothed curve.
+    mean_episode_return is NaN on iterations where no episode finished
+    inside the timestep budget; Plotly leaves a gap rather than drawing a
+    fake zero (connectgaps=False), which is the honest rendering.
     """
     fig = go.Figure()
     any_data = False
@@ -63,35 +52,18 @@ def build_reward_figure(runs: dict[str, RunResult]) -> go.Figure:
         if run.metrics.empty or "mean_episode_return" not in run.metrics.columns:
             continue
         any_data = True
-        # Raw first so the smoothed line draws on top of it, and pin both
-        # traces of a run to one color via a shared legend group.
         fig.add_trace(
             go.Scatter(
                 x=run.metrics["iteration"], y=run.metrics["mean_episode_return"],
-                mode="lines", name=f"{run_id} (per-iteration)", connectgaps=False,
-                legendgroup=run_id, opacity=0.35, line=dict(width=1),
-                hovertemplate="iter %{x}<br>per-iteration %{y:.1f}<extra></extra>",
+                mode="lines", name=run_id, connectgaps=False,
+                hovertemplate="iter %{x}<br>reward %{y:.0f}<extra></extra>",
             )
         )
-        if "ep_rew_mean" in run.metrics.columns:
-            smoothed = run.metrics["ep_rew_mean"]
-        else:
-            smoothed = trailing_episode_mean(run.metrics, window_episodes=_REWARD_WINDOW_EPISODES)
-        if smoothed is not None:
-            fig.add_trace(
-                go.Scatter(
-                    x=run.metrics["iteration"], y=smoothed,
-                    mode="lines", name=f"{run_id} (last {_REWARD_WINDOW_EPISODES} episodes)",
-                    connectgaps=False, legendgroup=run_id, line=dict(width=2.5),
-                    hovertemplate=f"iter %{{x}}<br>trailing-{_REWARD_WINDOW_EPISODES}ep %{{y:.1f}}<extra></extra>",
-                )
-            )
     if not any_data:
         return _empty_figure("No reward data yet -- select a run, or wait for the first completed episode.")
     fig.update_layout(
         template=_TEMPLATE, height=360, margin=dict(l=50, r=20, t=30, b=40),
-        xaxis_title="iteration",
-        yaxis_title=f"episode return (bold = trailing {_REWARD_WINDOW_EPISODES} episodes)",
+        xaxis_title="iteration", yaxis_title="reward (batch avg per iteration)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     return fig
@@ -162,29 +134,33 @@ def _kpi_card(label: str, value: str, icon: str) -> dbc.Col:
     )
 
 
+_FINAL_WINDOW_ITERS = 100
+
+
 def build_kpi_cards(runs: dict[str, RunResult]) -> list[dbc.Col]:
     """KPI row for one selection of runs (one dashboard section) -- kept
     per-section rather than global, same reason each section gets its own
-    graphs: a "best reward" or "total comm" pooled across e.g. both
-    Swimmer AND Hopper runs at once would mix two incomparable scales into
-    one meaningless number."""
+    graphs: a "best reward" pooled across e.g. both Swimmer AND Hopper runs
+    at once would mix two incomparable scales into one meaningless number."""
     completed = [r for r in runs.values() if not r.metrics.empty]
     total_iterations = sum(int(r.metrics["iteration"].max()) for r in completed) if completed else 0
 
-    # Best SUSTAINED return, i.e. the peak of the trailing-episode-window
-    # curve -- not the peak of the raw per-iteration column, which on
-    # Hopper is often a single lucky episode (that column averages only
-    # whatever finished inside one iteration's budget, sometimes exactly
-    # one episode). Reporting that max would flatter every run by showing
-    # its luckiest episode rather than its actual level.
     def _best(run: RunResult):
-        if "ep_rew_mean" in run.metrics.columns:
-            series = run.metrics["ep_rew_mean"]
-        else:
-            series = trailing_episode_mean(run.metrics, window_episodes=_REWARD_WINDOW_EPISODES)
-        if series is None:
-            series = run.metrics.get("mean_episode_return")
-        return series.max() if series is not None and not series.empty else None
+        """FINAL reward: the mean of `mean_episode_return` over the last
+        _FINAL_WINDOW_ITERS iterations -- the same quantity the paper's
+        Table 2 reports as "final rewards", on the same column the chart
+        plots.
+
+        Deliberately not the MAX of that column: at ~1.2 episodes per
+        iteration its maximum is whichever single episode got luckiest,
+        which flatters every run. Averaging a window of the run's own tail
+        is both honest and directly comparable to Table 2.
+        """
+        s = run.metrics.get("mean_episode_return")
+        if s is None:
+            return None
+        s = s.dropna().tail(_FINAL_WINDOW_ITERS)
+        return s.mean() if not s.empty else None
 
     best_candidates = [b for b in (_best(r) for r in completed) if b is not None and b == b]
     best_reward = max(best_candidates) if best_candidates else None
@@ -199,6 +175,6 @@ def build_kpi_cards(runs: dict[str, RunResult]) -> list[dbc.Col]:
     return [
         _kpi_card("Runs selected", str(len(runs)), "fa-layer-group"),
         _kpi_card("Iterations logged (max)", f"{total_iterations:,}", "fa-forward"),
-        _kpi_card(f"Best return (last {_REWARD_WINDOW_EPISODES} eps)", f"{best_reward:,.1f}" if best_reward is not None else "--", "fa-arrow-trend-up"),
+        _kpi_card(f"Final reward (last {_FINAL_WINDOW_ITERS} iters)", f"{best_reward:,.1f}" if best_reward is not None else "--", "fa-arrow-trend-up"),
         _kpi_card("Total comm (all selected)", f"{total_bytes:.3e} B", "fa-tower-broadcast"),
     ]

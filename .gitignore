@@ -55,3 +55,4 @@ settings.local.json
 
 # Stray archives (a 10 MB claude.zip was committed once by accident)
 *.zip
+results_archive/
