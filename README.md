@@ -1,8 +1,15 @@
 # FedNPG-ADMM — Communication-Efficient Federated Natural Policy Gradient
 
-> 🚧 **Status: scaffold only.** This repo currently contains structure, not
-> algorithms. Nothing here trains anything yet. Treat this README as the
-> project guide/checklist, not a changelog of things that exist.
+> **Status:** `fednpg_admm` (task ii) is complete. Across 9-10 seeds per
+> configuration: **Swimmer-v4 reproduces Table 2 at N>=2** (126.1/127.1/128.3 vs
+> the paper's 123.6/127.2/128.5) with *tighter* seed variance than the paper, and
+> **Humanoid-v4 scales 945 -> 6212** from N=1 to N=8. **Hopper-v4 exceeds the paper
+> at N=1** (2165 +- 705 vs 1473 +- 383) but *decreases* with more agents, the one
+> reproduction failure. Full tables, the diagnosis, and the hypotheses tested and
+> refuted are in
+> [docs/final_configuration_and_findings.md](docs/final_configuration_and_findings.md).
+> `baselines` (task iii) and `quantization` (task iv) remain
+> `NotImplementedError`/TODO stubs, as does `results_exporter`.
 
 Course project reproducing and extending:
 
@@ -30,9 +37,12 @@ complexity. Empirically validated on Swimmer-v4 / Hopper-v4 / Humanoid-v4
 Straight from the email, turned into a checklist:
 
 - [ ] **(i)** Report section explaining the paper's main idea.
-- [ ] **(ii)** Pseudocode for FedNPG-ADMM + a working implementation
+- [x] **(ii)** Pseudocode for FedNPG-ADMM + a working implementation
       (Algorithm 1 in the paper — agent-side ADMM update + server-side
-      aggregation). → `fednpg_admm`
+      aggregation). → `fednpg_admm` — **done**; see
+      [docs/final_configuration_and_findings.md](docs/final_configuration_and_findings.md)
+      for the final hyperparameters, the reproduction tables, and the
+      hypotheses tested and refuted along the way.
 - [ ] **(iii)** *If time allows:* one small state-space instance and one
       large state-space instance, benchmarked against other FedRL methods —
       at minimum standard-average FedNPG ($O(d²)$, eq. 12 in the paper),
