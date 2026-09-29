@@ -47,6 +47,7 @@ from common.rollout import (
 from common.hyperparams import DEFAULT_HYPERPARAMS
 from common.optim import line_search_step
 
+from .fedppo import local_ppo_update
 from .fednpg_standard import standard_average_step
 
 
@@ -60,6 +61,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--results-path", type=str, default="results")
     p.add_argument("--run-id", type=str, default=None)
     p.add_argument("--device", type=str, default="cpu")
+    p.add_argument("--ppo-clip", type=float, default=0.2,
+                   help="PPO clipping parameter (default 0.2, the value the paper states "
+                        "for its Figure 3 FedPPO comparison). --algo fedppo only.")
+    p.add_argument("--ppo-epochs", type=int, default=10,
+                   help="Local PPO epochs per agent per round before parameter averaging "
+                        "(--algo fedppo only). The paper does not specify this; 10 matches "
+                        "stable-baselines3's PPO default, which its Setup section cites.")
+    p.add_argument("--ppo-lr", type=float, default=3e-4,
+                   help="Local Adam learning rate for the FedPPO actor (default 3e-4).")
+    p.add_argument("--ppo-batch-size", type=int, default=64)
     p.add_argument("--cg-iters", type=int, default=50,
                    help="CG iterations for the pooled solve (default 50, higher than the ADMM "
                         "path's per-agent 10: this solve is the reference, not an approximation).")
@@ -99,8 +110,6 @@ def resolve_hyperparams(args) -> dict:
 
 
 def train(args: argparse.Namespace) -> str:
-    if args.algo == "fedppo":
-        raise NotImplementedError("fedppo is not implemented yet -- see baselines/fedppo.py")
     if not args.show_warnings:
         warnings.filterwarnings("ignore")
     random.seed(args.seed)
@@ -139,13 +148,17 @@ def train(args: argparse.Namespace) -> str:
     writer = ResultsWriter(
         args.results_path, run_id=run_id,
         metadata={
-            "algorithm": "fednpg_standard", "env": args.env, "num_agents": args.num_agents,
+            "algorithm": "fednpg_standard" if args.algo == "fednpg-standard" else "fedppo", "env": args.env, "num_agents": args.num_agents,
             "num_params": d, "seed": args.seed, "device": str(device),
             "ortho_init": args.ortho_init, "log_std_init": float(policy.log_std.detach().mean()),
             "log_std_min": policy.log_std_min, "log_std_max": policy.log_std_max,
             "normalize_obs": args.normalize_obs, "normalize_reward": args.normalize_reward,
             "advantage_normalization": args.advantage_normalization,
             "cg_iters": args.cg_iters, "line_search": args.line_search,
+            **({"ppo_clip": args.ppo_clip, "ppo_epochs": args.ppo_epochs,
+                "ppo_lr": args.ppo_lr, "ppo_batch_size": args.ppo_batch_size,
+                "fedppo_variant": "fedavg (local epochs + parameter averaging)"}
+               if args.algo == "fedppo" else {}),
             "critic_epochs": args.critic_epochs, "critic_batch_size": args.critic_batch_size,
             "stats_window_size": args.stats_window_size,
             "eval_interval": args.eval_interval, "eval_episodes": args.eval_episodes,
@@ -173,43 +186,66 @@ def train(args: argparse.Namespace) -> str:
             value_fn, all_obs, all_returns, value_optimizer,
             epochs=args.critic_epochs, batch_size=args.critic_batch_size)
 
-        # Each agent's score-function gradient g_i, then the O(d^2) uplink:
-        # g_i is a real tensor through the Channel, H_i is charged at its true
-        # d*d size without being built (see fednpg_standard's module docstring).
-        g_list = []
-        for b, channel in zip(batches, channels):
-            lp = policy.log_prob(b.obs, b.actions)
-            g_i = get_flat_grad((lp * b.advantages.detach()).mean(), policy, retain_graph=True)
-            g_list.append(channel.send("g_i", g_i, iteration=k))
-            channel.record_unmaterialized_send("H_i", num_elements=d * d, iteration=k)
-
         step_skipped = False
         backtracks = 0
         achieved_kl = closed_form_step = applied_step = float("nan")
-        try:
-            direction, step_size = standard_average_step(
-                policy, all_obs, torch.stack(g_list).sum(dim=0),
-                num_agents=args.num_agents, delta=hp["delta"],
-                damping=hp["rho"], cg_iters=args.cg_iters)
-            closed_form_step = step_size.item()
-        except ValueError as e:
-            if args.on_invalid_step == "raise":
-                raise
-            step_skipped = True
-            tqdm.write(f"[{run_id}] iter {k}: step skipped ({e})")
+        ppo_clip_fraction = float("nan")
+
+        if args.algo == "fedppo":
+            # Each agent runs local PPO epochs from the shared theta, then
+            # uplinks its parameter delta (O(d)); the server averages them.
+            # See fedppo.py for why this FedAvg reading was chosen over a
+            # one-gradient-step FedSGD one.
+            deltas, kls, clips = [], [], []
+            for b, channel in zip(batches, channels):
+                theta_i, st = local_ppo_update(
+                    policy, theta, b.obs, b.actions, b.advantages.detach(),
+                    lr=args.ppo_lr, clip=args.ppo_clip,
+                    epochs=args.ppo_epochs, batch_size=args.ppo_batch_size)
+                deltas.append(channel.send("delta_theta", theta_i - theta, iteration=k))
+                kls.append(st.approx_kl)
+                clips.append(st.clip_fraction)
+            theta = theta + torch.stack(deltas).mean(dim=0)
+            achieved_kl = float(sum(kls) / len(kls))
+            ppo_clip_fraction = float(sum(clips) / len(clips))
+            applied_step = 1.0  # averaging applies the full averaged delta
         else:
-            if args.line_search:
-                theta, backtracks, achieved_kl = line_search_step(
-                    policy, theta, direction, step_size, all_obs,
-                    torch.cat([b.actions for b in batches]),
-                    torch.cat([b.advantages for b in batches]),
-                    delta=hp["delta"], max_backtracks=args.line_search_max_backtracks,
-                    backtrack_coeff=args.line_search_backtrack_coeff)
-                if backtracks < args.line_search_max_backtracks:
-                    applied_step = closed_form_step * (args.line_search_backtrack_coeff**backtracks)
+            # Each agent's score-function gradient g_i, then the O(d^2)
+            # uplink: g_i is a real tensor through the Channel, H_i is
+            # charged at its true d*d size without being built (see
+            # fednpg_standard's module docstring).
+            g_list = []
+            for b, channel in zip(batches, channels):
+                lp = policy.log_prob(b.obs, b.actions)
+                g_i = get_flat_grad((lp * b.advantages.detach()).mean(), policy, retain_graph=True)
+                g_list.append(channel.send("g_i", g_i, iteration=k))
+                channel.record_unmaterialized_send("H_i", num_elements=d * d, iteration=k)
+
+            try:
+                direction, step_size = standard_average_step(
+                    policy, all_obs, torch.stack(g_list).sum(dim=0),
+                    num_agents=args.num_agents, delta=hp["delta"],
+                    damping=hp["rho"], cg_iters=args.cg_iters)
+                closed_form_step = step_size.item()
+            except ValueError as e:
+                if args.on_invalid_step == "raise":
+                    raise
+                step_skipped = True
+                tqdm.write(f"[{run_id}] iter {k}: step skipped ({e})")
             else:
-                theta = theta + step_size * direction
-                applied_step = closed_form_step
+                if args.line_search:
+                    theta, backtracks, achieved_kl = line_search_step(
+                        policy, theta, direction, step_size, all_obs,
+                        torch.cat([b.actions for b in batches]),
+                        torch.cat([b.advantages for b in batches]),
+                        delta=hp["delta"], max_backtracks=args.line_search_max_backtracks,
+                        backtrack_coeff=args.line_search_backtrack_coeff)
+                    if backtracks < args.line_search_max_backtracks:
+                        applied_step = closed_form_step * (
+                            args.line_search_backtrack_coeff**backtracks)
+                else:
+                    theta = theta + step_size * direction
+                    applied_step = closed_form_step
 
         mean_rewards = torch.tensor([b.raw_rewards.mean().item() for b in batches])
         all_eps: list[float] = []
@@ -250,6 +286,7 @@ def train(args: argparse.Namespace) -> str:
             kl=achieved_kl,
             step_size=applied_step,
             closed_form_step_size=closed_form_step,
+            ppo_clip_fraction=ppo_clip_fraction,
             mean_action_std=action_std.mean().item(),
             min_action_std=action_std.min().item(),
             max_action_std=action_std.max().item(),
