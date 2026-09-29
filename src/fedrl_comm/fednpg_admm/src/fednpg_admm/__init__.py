@@ -6,8 +6,8 @@ outside the CLI (e.g. from a notebook, or from quantization's sweep).
 """
 
 from .agent import AgentState, agent_update
-from .cg import conjugate_gradient
-from .fisher import kl_divergence_loss, make_fisher_vector_product
+from common.optim import conjugate_gradient
+from common.optim import kl_divergence_loss, make_fisher_vector_product
 from .hyperparams import DEFAULT_HYPERPARAMS, HyperParams
 from .server import server_update
 from .train import train

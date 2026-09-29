@@ -19,8 +19,7 @@ from common.networks.policy import GaussianMLPPolicy
 from common.networks.utils import get_flat_grad
 from common.rollout.buffer import RolloutBatch
 
-from .cg import conjugate_gradient
-from .fisher import make_fisher_vector_product
+from common.optim import conjugate_gradient, make_fisher_vector_product
 
 
 @dataclass

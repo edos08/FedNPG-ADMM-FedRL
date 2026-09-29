@@ -51,7 +51,7 @@ Straight from the email, turned into a checklist:
       vs. quantization resolution. **Not in the original paper** — this is
       the actual novel contribution of the project. → `quantization`
 
-Report deadline: end of September.
+Report deadline: 12 October 2026.
 
 ## 3. Repo structure
 
