@@ -85,6 +85,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-advantage-normalization", dest="advantage_normalization",
                    action="store_false", default=True)
     p.add_argument("--no-ortho-init", dest="ortho_init", action="store_false", default=True)
+    # Same meaning and defaults as fedrl-train-admm's flags of the same name.
+    # They exist here so a baseline can run under exactly FedNPG-ADMM's Hopper
+    # configuration, which turns the clamp off (--log-std-min -20
+    # --log-std-max 20): the Figure 3 comparison is only fair if every arm
+    # shares the same practical settings. Omitted = the policy's own default
+    # bounds [-2.0, 0.5], so earlier baseline runs are unaffected.
+    p.add_argument("--log-std-min", type=float, default=None)
+    p.add_argument("--log-std-max", type=float, default=None)
     p.add_argument("--eval-interval", type=int, default=0)
     p.add_argument("--eval-episodes", type=int, default=10)
     p.add_argument("--save-checkpoint", action="store_true")
@@ -121,8 +129,13 @@ def train(args: argparse.Namespace) -> str:
     spec = get_env_spec(args.env)
 
     spec_env = make_env(args.env, seed=args.seed)
+    log_std_bounds = {
+        k: v for k, v in (("log_std_min", args.log_std_min), ("log_std_max", args.log_std_max))
+        if v is not None
+    }
     policy = GaussianMLPPolicy.from_env(
-        spec_env, hidden_sizes=spec.hidden_sizes, ortho_init=args.ortho_init).to(device)
+        spec_env, hidden_sizes=spec.hidden_sizes, ortho_init=args.ortho_init,
+        **log_std_bounds).to(device)
     value_fn = ValueMLP.from_env(
         spec_env, hidden_sizes=spec.hidden_sizes, ortho_init=args.ortho_init).to(device)
     spec_env.close()

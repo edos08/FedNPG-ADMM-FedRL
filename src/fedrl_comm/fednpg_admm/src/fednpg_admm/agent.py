@@ -47,6 +47,7 @@ def agent_update(
     y_prev: torch.Tensor,
     rho: float,
     cg_iters: int = 10,
+    entropy_coef: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor, AgentState]:
     """
     Run Algorithm 1, lines 5-9, for one agent, one iteration.
@@ -72,6 +73,30 @@ def agent_update(
     # a function of the actor's parameters.
     log_probs = policy.log_prob(batch.obs, batch.actions)
     surrogate = (log_probs * batch.advantages.detach()).mean()
+
+    # Optional entropy bonus. NOT part of Algorithm 1, which has no entropy
+    # term at all; off by default (entropy_coef=0.0 leaves `surrogate`
+    # untouched and the update bit-identical to the paper's).
+    #
+    # Why it exists: measured on Hopper, the policy's action std collapses
+    # faster the more data each update sees -- 0.513/0.381/0.291 at
+    # num_agents=1 with T=1024 against 0.387/0.231/0.191 at num_agents=8,
+    # at iterations 100/200/300. A single agent given the same 8192 samples
+    # per update (T=8192) tracks the eight-agent collapse almost exactly
+    # (0.389/0.249/0.201), so the driver is batch size, not federation. On
+    # Hopper that lands the policy in a fast-but-falls gait (354-step
+    # episodes against 753 at the lower collapse rate); Swimmer and
+    # Humanoid have no such trap and are unaffected.
+    #
+    # For this policy the term is surgical. With a state-independent
+    # diagonal Gaussian, H = sum_j (log_std_j + 0.5*log(2*pi*e)), so
+    # dH/dlog_std_j = 1 and dH/dmean = 0: the bonus reaches only the
+    # log_std coordinates of theta, which is exactly where the collapse
+    # happens. Note it goes silent once log_std hits log_std_min, because
+    # std() clamps and the clamp has zero gradient there.
+    if entropy_coef:
+        surrogate = surrogate + entropy_coef * policy.distribution(batch.obs).entropy().mean()
+
     g_i = get_flat_grad(surrogate, policy, retain_graph=True)
 
     # line 8: local ADMM solve, y_i = (H_i + rho*I)^-1 (g_i - lam_i + rho*y_prev)

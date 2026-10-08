@@ -59,6 +59,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", type=str, default=None)
     parser.add_argument("--cg-iters", type=int, default=10)
     parser.add_argument(
+        "--entropy-coef",
+        type=float,
+        default=0.0,
+        help=(
+            "Weight on an entropy bonus added to each agent's policy gradient "
+            "(Algorithm 1 line 7). Default 0.0 reproduces the paper exactly, "
+            "which has no entropy term.\n\n"
+            "Motivation, measured on Hopper: the action std collapses faster "
+            "the more data each update sees, and a single agent given eight "
+            "agents' worth of samples per update collapses identically to "
+            "eight agents -- so the driver is batch size, not federation. On "
+            "Hopper that premature collapse settles into a fast-but-falls "
+            "gait (354-step episodes against 753), which is why performance "
+            "there DECREASES with more agents while Swimmer and Humanoid, "
+            "which have no comparable local optimum, improve. For a "
+            "state-independent diagonal Gaussian the bonus reaches only the "
+            "log_std coordinates, so it counteracts that collapse directly "
+            "and touches nothing else."
+        ),
+    )
+    parser.add_argument(
         "--critic-epochs",
         type=int,
         default=10,
@@ -297,6 +318,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Shrink factor applied to the candidate step size after each failed "
         "backtracking attempt (default: 0.8, same conventional value TRPO implementations use).",
     )
+    parser.add_argument(
+        "--line-search-accept-ratio",
+        type=float,
+        default=0.0,
+        help=(
+            "Schulman's original TRPO acceptance rule: reject a candidate step unless its "
+            "REALIZED surrogate gain is at least this fraction of the gain the linear model "
+            "predicts for it. 0.0 (default) keeps the weaker 'any improvement' test and is "
+            "bit-identical to it. 0.1 is TRPO's own value, and stops a converged policy being "
+            "pushed a full trust region every round by what is left in g -- Algorithm 1 has no "
+            "convergence criterion and no step decay, so as g -> 0 the closed-form step size "
+            "grows to keep KL at delta regardless."
+        ),
+    )
     return parser
 
 
@@ -436,9 +471,11 @@ def train(args: argparse.Namespace) -> str:
             "advantage_normalization": args.advantage_normalization,
             "advantage_normalization_scope": args.advantage_normalization_scope,
             "cg_iters": args.cg_iters,
+            "entropy_coef": args.entropy_coef,
             "line_search": args.line_search,
             "line_search_max_backtracks": args.line_search_max_backtracks,
             "line_search_backtrack_coeff": args.line_search_backtrack_coeff,
+            "line_search_accept_ratio": args.line_search_accept_ratio,
             "critic_epochs": args.critic_epochs,
             "critic_batch_size": args.critic_batch_size,
             "stats_window_size": args.stats_window_size,
@@ -509,9 +546,28 @@ def train(args: argparse.Namespace) -> str:
             y_i, g_i, agent_states[i] = agent_update(
                 policy, batch, agent_states[i], y_prev=y_global,
                 rho=hp["rho"], cg_iters=args.cg_iters,
+                entropy_coef=args.entropy_coef,
             )
             y_list.append(channel.send("y_i", y_i, iteration=k))
             g_list.append(channel.send("g_i", g_i, iteration=k))
+
+        # Dual-variable magnitude -- diagnostic only, never read by the
+        # algorithm. Algorithm 1 line 8 solves with (g_i - lam_i + rho*y),
+        # so lam_i competes directly with g_i for control of the local
+        # direction. lam_i is identically zero at N=1 (its increment is
+        # rho*(y_i - mean_j y_j), which is 0 when there is one agent) and
+        # an undecayed integrator at N>1, so if it grows without bound the
+        # local solves stop being driven by the gradient at all -- a
+        # failure mode that by construction cannot appear at N=1 and gets
+        # worse the longer a run goes. Reported relative to |g_i| because
+        # the absolute norm is meaningless on its own.
+        with torch.no_grad():
+            lam_norms = torch.tensor([s.lam_i.norm().item() for s in agent_states])
+            g_norms = torch.tensor([t.detach().norm().item() for t in g_list])
+            lambda_norm_max = lam_norms.max().item()
+            lambda_norm_mean = lam_norms.mean().item()
+            lambda_to_g = (lam_norms.mean() / g_norms.mean().clamp_min(1e-12)).item()
+            y_norm = torch.stack([t.detach() for t in y_list]).mean(dim=0).norm().item()
 
         # Consensus health, free to compute (no Fisher products): if the
         # agents' y_i are mutually near-orthogonal, their mean is short and
@@ -570,6 +626,15 @@ def train(args: argparse.Namespace) -> str:
                 # a federated line search should evaluate KL/improvement.
                 all_actions = torch.cat([b.actions for b in batches])
                 all_advantages = torch.cat([b.advantages for b in batches])
+                # Linear model's predicted surrogate gain for the full
+                # step. The pooled surrogate's gradient at theta is the
+                # MEAN of the per-agent g_i (each is already a mean over
+                # its own equal-sized batch), so the prediction for a
+                # displacement step_size*y is step_size * (g_mean . y).
+                # Only consulted when --line-search-accept-ratio > 0.
+                with torch.no_grad():
+                    g_mean = torch.stack([t.detach() for t in g_list]).mean(dim=0)
+                    expected_improve = (step_size * torch.dot(g_mean, y_global)).item()
                 theta, line_search_backtracks, achieved_kl = line_search_step(
                     policy,
                     theta,
@@ -581,6 +646,8 @@ def train(args: argparse.Namespace) -> str:
                     delta=hp["delta"],
                     max_backtracks=args.line_search_max_backtracks,
                     backtrack_coeff=args.line_search_backtrack_coeff,
+                    expected_improve=expected_improve,
+                    accept_ratio=args.line_search_accept_ratio,
                 )
                 if line_search_backtracks < args.line_search_max_backtracks:
                     applied_step = closed_form_step * (
@@ -663,6 +730,10 @@ def train(args: argparse.Namespace) -> str:
             closed_form_step_size=closed_form_step,
             consensus_cos=consensus_cos,
             consensus_spread=consensus_spread,
+            lambda_norm_max=lambda_norm_max,
+            lambda_norm_mean=lambda_norm_mean,
+            lambda_to_g=lambda_to_g,
+            y_norm=y_norm,
             **eval_metrics,
             mean_action_std=action_std.mean().item(),
             min_action_std=action_std.min().item(),

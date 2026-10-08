@@ -29,6 +29,8 @@ def line_search_step(
     delta: float,
     max_backtracks: int = 10,
     backtrack_coeff: float = 0.8,
+    expected_improve: float | None = None,
+    accept_ratio: float = 0.0,
 ) -> tuple[torch.Tensor, int, float]:
     """
     TRPO-style backtracking line search around Algorithm 1 line 13's
@@ -67,6 +69,29 @@ def line_search_step(
     server_update's ValueError path, just for a different failure mode (a
     well-defined but empirically-bad step, rather than an undefined one).
 
+    `expected_improve`/`accept_ratio` implement Schulman's ORIGINAL TRPO
+    acceptance rule, which is stricter than the `improvement > 0` test
+    above: the realized surrogate gain must be at least `accept_ratio` of
+    the gain the linear model predicts for that displacement, i.e.
+    `(new - old) / (step_size * g_mean . y) >= accept_ratio`, with the
+    predicted gain rescaled at each backtrack since it is linear in the
+    step. accept_ratio=0.0 (the default) reduces EXACTLY to the previous
+    `improvement > 0` test, so this is inert unless asked for.
+
+    Why it matters here: Algorithm 1 line 13 normalizes the step so the
+    policy moves `delta` in KL EVERY iteration regardless of how small the
+    gradient has become -- as g -> 0 the closed-form step size -> infinity
+    to keep KL at delta. There is no convergence criterion and no step
+    decay anywhere in the algorithm, so a converged policy keeps being
+    pushed a full trust region per round by whatever is left in g, which
+    late in training is mostly critic error. `improvement > 0` barely
+    filters that, because pooled advantages are normalized to mean ~0, so
+    `old_surrogate` is ~0 and almost any gradient-aligned step clears it.
+    Requiring a fixed FRACTION of the predicted improvement does filter
+    it, and goes quiet on its own once there is real improvement to be
+    had -- it only bites where the linear model has stopped predicting
+    anything.
+
     Mutates `policy`'s live parameters as a side effect of evaluating
     each candidate (via set_flat_params) -- always left holding whichever
     theta this function returns by the time it returns, so callers don't
@@ -83,6 +108,11 @@ def line_search_step(
 
     for i in range(max_backtracks):
         candidate_theta = theta + step_size * y
+        # Predicted gain is linear in the displacement, so it shrinks by
+        # backtrack_coeff alongside step_size at every backtrack.
+        predicted = (
+            expected_improve * (backtrack_coeff**i) if expected_improve is not None else None
+        )
         set_flat_params(policy, candidate_theta)
 
         new_dist = policy.distribution(obs)
@@ -90,7 +120,10 @@ def line_search_step(
         ratio = torch.exp(policy.log_prob(obs, actions) - old_log_prob)
         new_surrogate = (advantages * ratio).mean()
 
-        if kl.item() <= delta and new_surrogate.item() > old_surrogate.item():
+        improved = new_surrogate.item() > old_surrogate.item()
+        if improved and predicted is not None and predicted > 0.0:
+            improved = (new_surrogate.item() - old_surrogate.item()) / predicted >= accept_ratio
+        if kl.item() <= delta and improved:
             return candidate_theta, i, kl.item()
 
         step_size = step_size * backtrack_coeff
