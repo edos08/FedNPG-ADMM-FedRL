@@ -221,21 +221,32 @@ Adam optimizer"*, which is the basis for each choice below.
 
 `gae_lambda = 0.95` comes from the Setup text, not the table.
 
-### Not in the paper (this project's choices, all defaults in the code)
+### Not in the paper (this project's choices) -- differs between environments
 
-| setting | value | basis |
-|---|---|---|
-| observation normalization | on, running mean/std, clip 10 | SB3 `VecNormalize` |
-| reward normalization | on, scale-only by running std of discounted return, clip 10 | SB3 `VecNormalize` |
-| advantage normalization | on, per-agent | SB3 |
-| orthogonal init | sqrt(2) hidden, 0.01 policy head, 1.0 value head | SB3 `ortho_init=True` |
-| `log_std_init` | -0.5 (std ~0.61) | tianshou / Spinning Up |
-| `log_std` clamp | [-2.0, 0.5] | ours; see section 3 -- keeping it is the *best* measured setting |
-| critic fitting | 10 epochs, minibatch 64, Adam | SB3 PPO defaults |
-| CG iterations / damping | 10 / rho | classic TRPO; damping = rho follows Algorithm 1 line 8 |
-| line search | on, 10 backtracks, shrink 0.8, ratio surrogate + true KL | paper's Setup cites TRPO line search |
-| `eta` | 1.0 | not specified anywhere; 1.0 = take the ADMM step unscaled |
-| `--on-invalid-step` | skip | Algorithm 1 has no fallback when (sum g_i)^T y <= 0 |
+**Hopper uses a different configuration from Swimmer and Humanoid** (decided
+2026-10-07). Why each setting differs, with the measurements, is in
+`docs/hopper_agent_scaling_findings.md` sections 3-5. In short: reward and
+advantage normalization each cause Hopper's late collapse, which grows with the
+number of agents; observation normalization stops it reaching the stable gait.
+Swimmer and Humanoid already reproduce the paper's agent-count ordering with the
+original configuration, so they keep it.
+
+| setting | Swimmer, Humanoid | Hopper | basis |
+|---|---|---|---|
+| observation normalization | on, running mean/std, clip 10 | **off** | SB3 `VecNormalize` |
+| reward normalization | on, scale-only by running std of discounted return, clip 10 | **off** | SB3 `VecNormalize` |
+| advantage normalization | on, per-agent | **off** | SB3 |
+| line search | on, 10 backtracks, shrink 0.8, ratio surrogate + true KL | **off** | paper's Setup cites TRPO line search |
+| `log_std` clamp | [-2.0, 0.5] | **off** (`--log-std-min -20 --log-std-max 20`) | ours |
+| orthogonal init | sqrt(2) hidden, 0.01 policy head, 1.0 value head | same | SB3 `ortho_init=True` |
+| `log_std_init` | -0.5 (std ~0.61) | same | tianshou / Spinning Up |
+| critic fitting | 10 epochs, minibatch 64, Adam | same | SB3 PPO defaults |
+| CG iterations / damping | 10 / rho | same | classic TRPO; damping = rho follows Algorithm 1 line 8 |
+| `eta` | 1.0 | same | not specified anywhere; 1.0 = take the ADMM step unscaled |
+| `--on-invalid-step` | skip | same | Algorithm 1 has no fallback when (sum g_i)^T y <= 0 |
+
+Report runs: Swimmer and Humanoid `{env}-N{1,2,4,8}-s{0..4}` (the code defaults);
+Hopper `final-hopper-N{1,2,4,8}-s{0..4}` (launched by `final_sweep.sh`).
 
 ### Commands
 
@@ -243,8 +254,14 @@ Every Table 4 default is applied automatically per `--env`; the flags below are 
 the measurement apparatus.
 
 ```bash
-# FedNPG-ADMM -- the configuration to report
-fedrl-train-admm --env hopper --num-agents 1 --seed 0 --device cuda:0 \
+# FedNPG-ADMM, Swimmer and Humanoid -- code defaults
+fedrl-train-admm --env swimmer --num-agents 1 --seed 0 --device cpu \
+  --eval-interval 25 --eval-episodes 10 --save-checkpoint --run-id <id>
+
+# FedNPG-ADMM, Hopper -- five settings off (see table above)
+fedrl-train-admm --env hopper --num-agents 1 --seed 0 --device cpu \
+  --no-line-search --no-obs-normalization --no-reward-normalization \
+  --no-advantage-normalization --log-std-min -20 --log-std-max 20 \
   --eval-interval 25 --eval-episodes 10 --save-checkpoint --run-id <id>
 
 # plain TRPO baseline (sibling project /mnt/edoardo/NPG), same settings
@@ -252,7 +269,7 @@ npg-train --env hopper --seed 0 --device cuda:0 \
   --eval-interval 25 --eval-episodes 10 --save-checkpoint --run-id <id>
 ```
 
-Swap `--env swimmer|hopper|humanoid` and `--num-agents 1|2|4|8`; nothing else changes.
+Swap `--env swimmer|humanoid` (first command) and `--num-agents 1|2|4|8`; Hopper always uses the second command. All runs on CPU: it measured faster than the GPU for every environment, Humanoid included (re-checked 2026-10-07).
 For figures matching the paper, run seeds 0-9 and average with a 95% CI across seeds
 (their Section 5 protocol). Note this smooths the *plotted* curve by ~sqrt(10); it does
 not change the underlying behaviour described in section 3.

@@ -1,15 +1,22 @@
 # FedNPG-ADMM — Communication-Efficient Federated Natural Policy Gradient
 
-> **Status:** `fednpg_admm` (task ii) is complete. Across 9-10 seeds per
-> configuration: **Swimmer-v4 reproduces Table 2 at N>=2** (126.1/127.1/128.3 vs
-> the paper's 123.6/127.2/128.5) with *tighter* seed variance than the paper, and
-> **Humanoid-v4 scales 945 -> 6212** from N=1 to N=8. **Hopper-v4 exceeds the paper
-> at N=1** (2165 +- 705 vs 1473 +- 383) but *decreases* with more agents, the one
-> reproduction failure. Full tables, the diagnosis, and the hypotheses tested and
-> refuted are in
+> **Status:** `fednpg_admm` (task ii) and `baselines` (task iii) are complete,
+> five seeds per configuration. **Swimmer-v4 reproduces Table 2 at every agent
+> count** (123.9/126.0/127.0/128.4 against the paper's 109.4/123.6/127.2/128.5),
+> and **Humanoid-v4 scales 993 -> 6329** from N=1 to N=8, both under the
+> original configuration. **Hopper-v4 uses its own configuration**: under the
+> original one, reward and advantage normalization made larger federations
+> collapse late in training and inverted the agent-count trend. With those
+> (and observation normalization, line search and the log-std clamp) turned
+> off, N=4/N=8 reach 2536/2656 against the paper's 2507/2719 and learn faster
+> than N=1/N=2. The per-environment settings, the isolation experiment and
+> the refuted hypotheses are in
+> [docs/hopper_agent_scaling_findings.md](docs/hopper_agent_scaling_findings.md);
+> the full configuration is in
 > [docs/final_configuration_and_findings.md](docs/final_configuration_and_findings.md).
-> `baselines` (task iii) and `quantization` (task iv) remain
-> `NotImplementedError`/TODO stubs, as does `results_exporter`.
+> Hopper runs are launched with `./final_sweep.sh hopper` (and
+> `hopper-baselines`); `./sweep_status.py` tracks progress. `quantization`
+> (task iv) has a stochastic-scheme sweep; `results_exporter` is still a stub.
 
 Course project reproducing and extending:
 
@@ -51,7 +58,7 @@ Straight from the email, turned into a checklist:
       vs. quantization resolution. **Not in the original paper** — this is
       the actual novel contribution of the project. → `quantization`
 
-Report deadline: end of September.
+Report deadline: 12 October 2026.
 
 ## 3. Repo structure
 

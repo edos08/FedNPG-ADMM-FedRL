@@ -61,6 +61,33 @@ class Channel:
         return out_tensor
 
 
+    def record_unmaterialized_send(
+        self, name: str, num_elements: int, iteration: "int | None" = None
+    ) -> None:
+        """
+        Record the cost of transmitting an object the simulation
+        deliberately never builds, and return nothing -- because nothing
+        arrives: the receiver reconstructs the same information locally.
+
+        One caller: the standard-average FedNPG baseline (paper eq. 12),
+        where each agent conceptually uplinks its full d x d Fisher H_i so
+        the server can solve (sum H_i)^-1 sum g_i. That O(d^2) cost is
+        exactly what FedNPG-ADMM exists to avoid, so it MUST appear in the
+        byte accounting -- but materializing H_i is impossible at
+        Humanoid's d = 727,074 (2.1 PB), and unnecessary: the simulation
+        has every agent's data in-process and gets the identical direction
+        from a pooled Fisher-vector product.
+
+        Do NOT use this to avoid routing a real tensor through send() -- a
+        transmission whose tensor exists must go through send(), or
+        quantization silently stops applying to it.
+        """
+        self.meter.record(
+            name, torch.empty(0), bits_per_element=64, iteration=iteration,
+            num_elements=num_elements,
+        )
+
+
 def make_channels_for_agents(num_agents: int) -> list[Channel]:
     """
     One independent Channel (and one independent ByteMeter) per agent,

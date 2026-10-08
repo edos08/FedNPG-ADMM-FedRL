@@ -53,11 +53,23 @@ class ByteMeter:
         tensor: torch.Tensor,
         bits_per_element: int = 64,
         iteration: "int | None" = None,
+        num_elements: "int | None" = None,
     ) -> TransmissionRecord:
+        """
+        `num_elements` overrides tensor.numel() for the one case where an
+        algorithm's transmitted object is deliberately never materialized:
+        the standard-average FedNPG baseline (paper eq. 12) uplinks each
+        agent's d x d Fisher, which is 0.095 GB on Swimmer, 1.36 GB on
+        Hopper and 2.1 PB on Humanoid -- the last being four orders of
+        magnitude beyond any machine, so the baseline could not exist at
+        all for the paper's largest environment. Same spirit as
+        bits_per_element: a bookkeeping fact about the wire format, not a
+        property of any tensor in memory. See baselines/fednpg_standard.py.
+        """
         rec = TransmissionRecord(
             name=name,
             iteration=iteration,
-            num_elements=tensor.numel(),
+            num_elements=tensor.numel() if num_elements is None else num_elements,
             bits_per_element=bits_per_element,
         )
         self._log.append(rec)
