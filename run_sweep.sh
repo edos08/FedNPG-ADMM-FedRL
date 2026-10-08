@@ -6,18 +6,25 @@
 # Resumable: a run whose metadata.json already has completed_at is skipped,
 # so re-running after a crash or a reboot picks up where it left off.
 set -u
-TARGET="${1:?usage: run_sweep.sh swimmer|hopper|humanoid|npg}"
+TARGET="${1:?usage: run_sweep.sh swimmer|hopper|humanoid|npg|base-<env>}"
 SEEDS="${SEEDS:-0 1 2}"
 AGENTS="${AGENTS:-1 2 4 8}"
-DEVICE="${DEVICE:-cuda:0}"
+# CPU, not CUDA. Measured on this machine: 6.49 vs 22.60 s/iter on Swimmer,
+# 4.03 vs 11.37 on Hopper, 5.47 vs 6.59 on Humanoid, all at N=8. The policies
+# are small and MuJoCo stepping is CPU-bound, so the GPU only adds per-timestep
+# launch overhead -- GAE alone runs 30x slower on it.
+DEVICE="${DEVICE:-cpu}"
 EVAL="--eval-interval 25 --eval-episodes 10 --save-checkpoint"
 
 # Four trainings run concurrently and every N=8 run forks 8 env subprocesses.
 # Without this, each torch process grabs all 46 cores and they thrash each
 # other -- MuJoCo stepping is CPU-bound, so oversubscription costs real
 # wall-clock.
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
-export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
+# Measured 3.84-4.17 s/iter from OMP=1 to OMP=8: this workload is not
+# thread-parallel, so extra threads buy nothing and only crowd out other jobs.
+# Four concurrent runs at OMP=1 showed under 2% interference.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 
 ADMM_DIR=/mnt/edoardo/FedNPG-ADMM-FedRL
 NPG_DIR=/mnt/edoardo/NPG
@@ -26,7 +33,21 @@ done_already() {  # $1 = results dir, $2 = run id
   [ -f "$1/$2/metadata.json" ] && grep -q '"completed_at"' "$1/$2/metadata.json"
 }
 
-if [ "$TARGET" = npg ]; then
+if [ "${TARGET#base-}" != "$TARGET" ]; then
+  # Figure 3 baselines for one environment: standard-average FedNPG and FedPPO.
+  # N is fixed at 8 because that is what the paper fixes for that comparison.
+  env="${TARGET#base-}"
+  cd "$ADMM_DIR"
+  for s in $SEEDS; do
+    for algo in fednpg-standard fedppo; do
+      id="${env}-${algo}-N8-s${s}"
+      done_already results "$id" && { echo "[skip] $id"; continue; }
+      echo "=== $(date '+%F %T')  start $id ==="
+      fedrl-train-baseline --algo "$algo" --env "$env" --num-agents 8 --seed "$s" \
+        --device "$DEVICE" --save-checkpoint --run-id "$id"
+    done
+  done
+elif [ "$TARGET" = npg ]; then
   cd "$NPG_DIR"
   for s in $SEEDS; do
     for env in swimmer hopper humanoid; do
