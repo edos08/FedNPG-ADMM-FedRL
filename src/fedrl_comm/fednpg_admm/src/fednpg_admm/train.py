@@ -24,13 +24,14 @@ import random
 import warnings
 from collections import deque
 from datetime import datetime
+from typing import Callable
 from pathlib import Path
 
 import numpy as np
 import torch
 from tqdm import tqdm
 
-from common.comms import make_channels_for_agents
+from common.comms import Channel, make_channels_for_agents
 from common.device import resolve_device
 from common.envs import NormalizingVectorEnv, get_env_spec, make_env, make_vector_env_for_agents
 from common.evaluation import evaluate_policy, save_checkpoint
@@ -349,8 +350,21 @@ def resolve_hyperparams(args: argparse.Namespace):
     }
 
 
-def train(args: argparse.Namespace) -> str:
-    """Returns the run_id, so callers (and tests) can locate the results directory."""
+def train(
+    args: argparse.Namespace,
+    channel_factory: "Callable[[int], list[Channel]]" = make_channels_for_agents,
+) -> str:
+    """
+    Returns the run_id, so callers (and tests) can locate the results directory.
+
+    channel_factory: builds the per-agent Channels used for the g_i/y_i
+    uplinks. Defaults to make_channels_for_agents (plain, unquantized
+    channels) -- passing a different factory (e.g. one wrapping each
+    Channel with a quantizing Transform) is quantization's hook into this
+    loop; see the quantization package, the only intended caller of this
+    parameter today. Every existing caller of train() (fedrl-train-admm's
+    own main()) is completely unaffected by this default.
+    """
     if not args.show_warnings:
         warnings.filterwarnings("ignore")
 
@@ -427,7 +441,7 @@ def train(args: argparse.Namespace) -> str:
     theta = get_flat_params(policy)  # already on `device` -- policy was moved there first
     y_global = torch.zeros(d, device=device)
     agent_states = [AgentState.initial(d, device=device) for _ in range(args.num_agents)]
-    channels = make_channels_for_agents(args.num_agents)
+    channels = channel_factory(args.num_agents)
     # Per-agent reward accumulated so far for whatever episode is still in
     # progress at the end of that agent's most recent batch -- threaded
     # into compute_episode_returns exactly like `obs` is threaded into

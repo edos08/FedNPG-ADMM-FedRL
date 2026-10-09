@@ -14,6 +14,7 @@ dependencies = [
     "numpy>=1.26",
     "torch==2.11.0",
     "fedrl-common>=0.1.0",
+    "fedrl-fednpg-admm>=0.1.0",
 ]
 
 [project.optional-dependencies]
