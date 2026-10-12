@@ -1,49 +1,46 @@
 # baselines
 
-> 🚧 Not implemented. This is the comparison side of task **(iii)**.
+The two methods FedNPG-ADMM is compared against in the paper's Figure 3, built
+on the same environments, networks, rollout, critic, normalization and
+line search (all from `common`), so the comparison differs only in how the
+server forms the policy update.
 
-Implements the algorithms FedNPG-ADMM needs to be compared against, so the
-report's claims ("ADMM keeps the convergence rate, drops the communication
-cost") are backed by something Claude — sorry, *we* — actually ran, not just
-copied from the paper's own Figure 2/3.
-
-## Planned contents
+## Contents
 
 ```
 src/baselines/
-├── fednpg_standard.py  # standard-average FedNPG, eq. (12) in the paper:
-│                        # server collects the full H_i (d x d) and g_i from
-│                        # every agent, averages, does the exact NPG update.
-│                        # O(d^2) communication — this is the thing
-│                        # FedNPG-ADMM is supposed to beat, so it needs to
-│                        # exist as working code, not just a number pasted
-│                        # from Table 1 of the paper.
-├── fedppo.py            # first-order baseline (federated PPO), used in the
-│                         # paper's Figure 3 comparison. Lower priority than
-│                         # fednpg_standard.py — the O(d^2) vs O(d) story is
-│                         # the one that actually matters for this project.
-└── train.py             # CLI entry point: fedrl-train-baseline --algo {fednpg,fedppo}
+├── fednpg_standard.py  # standard-average FedNPG, eq. (12) of the paper:
+│                       # the exact global direction (sum_i H_i)^-1 sum_i g_i
+├── fedppo.py           # federated PPO, FedAvg style: local clipped-PPO epochs,
+│                       # agents send parameter deltas, the server averages
+└── train.py            # CLI: fedrl-train-baseline
 ```
 
-## Why this is separate from `fednpg_admm`
+**Standard-average FedNPG** computes its direction matrix-free, by conjugate
+gradient on the pooled Fisher, because materializing `sum_i H_i` is not
+feasible at Humanoid scale (about 2 PB in double precision). The byte meter is
+nevertheless charged the full `d^2 + d` values per agent per round, which is what
+the method would transmit, so the communication comparison is exact.
 
-Both packages share environment/network/rollout code (that's `common`).
-Keeping the *competing algorithms* in their own package means the ADMM
-implementation isn't tangled up with the thing it's being benchmarked
-against, and it makes clear in the repo history which commits are
-"reproducing the paper's baseline" vs "implementing the paper's actual
-contribution."
+**FedPPO** uses the clipping parameter the paper gives (0.2). The paper does not
+specify the aggregation or the number of local epochs; this implementation runs
+several local PPO epochs per round and averages the agents' parameter deltas.
+
+## Usage
+
+```bash
+fedrl-train-baseline --algo fednpg-standard --env swimmer --num-agents 8 --seed 0
+fedrl-train-baseline --algo fedppo          --env swimmer --num-agents 8 --seed 0
+fedrl-train-baseline --help
+```
+
+The flags for the practical settings match `fedrl-train-admm`
+(`--no-obs-normalization`, `--no-line-search`, `--log-std-min`, ...), so a
+baseline can run in exactly the configuration of the FedNPG-ADMM runs it is
+compared with. `run_sweep.sh base-swimmer|base-humanoid` and
+`final_sweep.sh hopper-baselines` run the published comparisons.
 
 ## Installation
 
-```bash
-cd baselines
-pip install -e .
-```
-
-## Usage (once implemented)
-
-```bash
-fedrl-train-baseline --algo fednpg-standard --env swimmer --num-agents 8
-fedrl-train-baseline --algo fedppo --env swimmer --num-agents 8
-```
+Installed together with the other packages from the repository root; see the
+main [README](../../../README.md#installation).

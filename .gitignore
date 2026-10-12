@@ -32,7 +32,7 @@ wandb/
 *.npy
 *.npz
 
-# Report build artifacts (keep the .tex, ignore compiled junk)
+# LaTeX build artifacts
 *.aux
 *.bbl
 *.blg
@@ -53,6 +53,6 @@ settings.local.json
 *.mp4
 *.gif
 
-# Stray archives (a 10 MB claude.zip was committed once by accident)
+# Stray archives
 *.zip
 results_archive/

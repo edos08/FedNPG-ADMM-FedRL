@@ -1,6 +1,6 @@
 """
 Results schema: what gets written to disk during a training run, and how
-results_webapp / results_exporter read it back.
+results_webapp reads it back.
 
 Built now despite being explicitly deferred earlier -- results_webapp
 can't display anything without SOME on-disk format to read. This is the

@@ -1,44 +1,29 @@
 #!/usr/bin/env bash
-# Final sweep for the report: one environment per invocation, 5 seeds x
-# num_agents 1/2/4/8, Table 4 iterations, live tqdm progress bars in tmux.
+# Hopper sweeps, in the reduced configuration the published Hopper results use:
+# no reward, advantage or observation normalization, no line search and no
+# log-std clamp (Swimmer and Humanoid use the standard settings; see
+# run_sweep.sh). Each target opens one tmux session with live progress bars.
 #
-#   ./final_sweep.sh all             # all three environments x 5 seeds = 15 sessions
-#   ./final_sweep.sh hopper          # FedNPG-ADMM on Hopper
-#   ./final_sweep.sh hopper-baselines   # Figure 3 baselines on Hopper, same settings
+#   ./final_sweep.sh hopper             FedNPG-ADMM, 5 seeds x N = 8, 4, 2, 1
+#   ./final_sweep.sh hopper-baselines   standard-average FedNPG + FedPPO, N=8
+#   ./final_sweep.sh hopper-quant       stochastic quantization, 6/8 bits, N=2/4/8
+#   DRY_RUN=1 ./final_sweep.sh <target> print the commands, start nothing
 #
-# One tmux session per environment (final-hopper, final-swimmer,
-# final-humanoid), each with 5 panes, one per seed. Each pane runs that seed's
-# four agent counts back to back (N=8, 4, 2, 1) and shows the live progress
-# bar of the current run.
+#   tmux attach -t final-hopper         (inside tmux: tmux switch-client -t ...)
+#   ./sweep_status.py --sweep final-hopper   progress table + ETA
 #
-#   tmux attach -t final-hopper      # (inside tmux: tmux switch-client -t final-hopper)
-#   Ctrl-b z                         # zoom one pane in/out;  Ctrl-b s  switch session
-#   ./sweep_status.py --sweep final-hopper     # table + whole-sweep ETA
-#   DRY_RUN=1 ./final_sweep.sh hopper          # print the 20 commands, start nothing
-#
-# At most 5 trainings per environment are in flight (one per seed), 15 with
-# all three environments -- which this 46-core machine carries alongside other
-# users' jobs.
-#
-# Resumable: a run whose metadata.json has completed_at is skipped, so
-# re-running this after a crash or a reboot continues where it stopped.
-# Run ids start with "final-" so nothing here mixes with earlier
-# experiments' results (e.g. hopper-N8-s0 is the old default configuration).
-#
-# Per-environment configuration -- why each differs is in
-# docs/hopper_agent_scaling_findings.md. Short version: reward normalization
-# and advantage normalization each cause Hopper's late collapse at high N,
-# so both are off everywhere; observation normalization is essential on
-# Swimmer and Humanoid and hurts Hopper, so it is on for those two only.
+# Run ids start with "final-hopper-". Resumable: a run whose metadata.json has
+# completed_at is skipped, so re-running continues where it stopped.
+# Requires the package CLIs on PATH (activate the environment first).
 set -u
-ENV_NAME="${1:?usage: final_sweep.sh all|hopper|hopper-baselines|swimmer|humanoid [--worker SEED]}"
+ENV_NAME="${1:?usage: final_sweep.sh hopper|hopper-baselines|hopper-quant}"
 if [ "$ENV_NAME" = all ]; then
   rc=0
   for e in hopper; do "$0" "$e" || rc=1; done
   exit $rc
 fi
-REPO=/mnt/edoardo/FedNPG-ADMM-FedRL
-BIN="${BIN:-/opt/pyenv/versions/fednpg/bin/fedrl-train-admm}"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="${BIN:-$(command -v fedrl-train-admm)}"
 SEEDS="${SEEDS:-0 1 2 3 4}"
 AGENTS="${AGENTS:-8 4 2 1}"
 # Device: CPU for every environment. Humanoid was tried on the GPU on
@@ -57,15 +42,10 @@ case "$ENV_NAME" in
 --no-advantage-normalization --log-std-min -20 --log-std-max 20"
     ;;
   swimmer|humanoid)
-    # Not re-run: the original configuration already reproduces the paper's
-    # agent-count ordering on these two, and their 5-seed results are on disk
-    # as {swimmer,humanoid}-N{1,2,4,8}-s{0..4}. See
-    # docs/hopper_agent_scaling_findings.md section 4.
-    echo "$ENV_NAME uses the original configuration; its report runs already exist" >&2
-    echo "(results/${ENV_NAME}-N{1,2,4,8}-s{0..4}). Nothing to launch." >&2
-    exit 0
+    echo "$ENV_NAME uses the standard configuration: run ./run_sweep.sh $ENV_NAME instead." >&2
+    exit 2
     ;;
-  hopper-baselines) CONFIG="" ;;   # handled by its own block below
+  hopper-baselines|hopper-quant) CONFIG="" ;;   # handled by their own blocks below
   *) echo "unknown env: $ENV_NAME" >&2; exit 2 ;;
 esac
 # Iterations are NOT passed: each environment falls back to its Table 4 K
@@ -73,16 +53,67 @@ esac
 
 run_id() { echo "final-${ENV_NAME}-N$1-s$2"; }
 done_already() { [ -f "$REPO/results/$1/metadata.json" ] && grep -q '"completed_at"' "$REPO/results/$1/metadata.json"; }
+# --- Hopper quantization grid -------------------------------------------------
+# Stochastic quantization of the agent-to-server uplink on Hopper (6 and 8
+# bits, N=2/4/8, 5 seeds), in the same reduced configuration as above. N=1 is
+# not quantized: one agent has no uplink, and final-hopper-N1-* covers it.
+# All 30 runs in parallel, one process each, via scripts/run_grid.py, which
+# names them hopper-N<n>-s<seed>-q<bits>; they go to results/hopper-quant/.
+# One tmux session; one window per (N, bits), five seed panes in each.
+if [ "$ENV_NAME" = hopper-quant ]; then
+  QDIR="$REPO/results/hopper-quant"
+  HOPPER_CFG="--no-line-search --no-obs-normalization --no-reward-normalization \
+--no-advantage-normalization --log-std-min -20 --log-std-max 20"
+  qcmd() {  # $1 = N, $2 = bits, $3 = seed
+    echo "cd $REPO && OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 ${PYTHON:-$(command -v python)} scripts/run_grid.py --env hopper --seed-start $3 --num-seeds 1 --agents $1 --bits $2 --scheme stochastic --results-path $QDIR $HOPPER_CFG --device cpu --eval-interval 25 --eval-episodes 10 --save-checkpoint"
+  }
+  if [ "${DRY_RUN:-0}" = 1 ]; then
+    for n in 8 4 2; do for b in 6 8; do for s in $SEEDS; do qcmd $n $b $s; echo; done; done; done; exit 0
+  fi
+  SESSION=final-hopper-quant
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "[exists] $SESSION -- left alone (attach: tmux attach -t $SESSION)"; exit 0
+  fi
+  first_window=1
+  for n in 8 4 2; do
+    for b in 6 8; do
+      win="N$n-q$b"
+      if [ $first_window -eq 1 ]; then
+        tmux new-session -d -s "$SESSION" -n "$win" -x 240 -y 70
+        tmux set-option -t "$SESSION" pane-border-status top
+        tmux set-option -t "$SESSION" pane-border-format " #{@name} "
+        first_window=0
+      else
+        tmux new-window -t "$SESSION" -n "$win"
+      fi
+      first_pane=1
+      for s in $SEEDS; do
+        if [ -f "$QDIR/hopper-N$n-s$s-q$b/metadata.json" ] && grep -q '"completed_at"' "$QDIR/hopper-N$n-s$s-q$b/metadata.json"; then
+          echo "[skip] hopper-N$n-s$s-q$b (already complete)"; continue
+        fi
+        if [ $first_pane -eq 0 ]; then
+          tmux split-window -t "$SESSION:$win"; tmux select-layout -t "$SESSION:$win" tiled
+        fi
+        first_pane=0
+        tmux set-option -p -t "$SESSION:$win" @name "hopper N=$n ${b}-bit seed $s"
+        tmux send-keys -t "$SESSION:$win" "$(qcmd $n $b $s)" C-m
+      done
+      tmux select-layout -t "$SESSION:$win" tiled
+    done
+  done
+  echo "started $SESSION: 6 windows (N=8,4,2 x 6,8 bits), 5 seed panes each -> $QDIR"
+  echo "  watch:  tmux attach -t $SESSION      (Ctrl-b w lists the windows, Ctrl-b n/p switches)"
+  echo "  table:  ./sweep_status.py --all hopper-N"
+  exit 0
+fi
+
 # --- Hopper baselines (Figure 3): standard-average FedNPG and FedPPO ---------
-# Same practical settings as FedNPG-ADMM's Hopper runs, so the comparison
-# measures the algorithms rather than the settings. Both baselines showed the
-# same late decay under the original settings (standard FedNPG -10..-19% from
-# peak, FedPPO -22..-49%, 5 seeds each). N=8 only, as in the paper's Figure 3.
+# Same settings as FedNPG-ADMM's Hopper runs, so the comparison measures the
+# algorithms rather than the settings. N=8, as in the paper's Figure 3.
 # One tmux session, one pane per (algorithm, seed): all 10 in parallel.
-# Swimmer and Humanoid baselines are NOT re-run: their existing runs used the
-# original configuration, the same one their FedNPG-ADMM runs use.
+# Swimmer and Humanoid baselines: ./run_sweep.sh base-swimmer|base-humanoid.
 if [ "$ENV_NAME" = hopper-baselines ]; then
-  BBIN="${BBIN:-/opt/pyenv/versions/fednpg/bin/fedrl-train-baseline}"
+  BBIN="${BBIN:-$(command -v fedrl-train-baseline)}"
   HOPPER_CFG="--no-line-search --no-obs-normalization --no-reward-normalization \
 --no-advantage-normalization --log-std-min -20 --log-std-max 20"
   bcmd() {  # $1 = algo, $2 = seed

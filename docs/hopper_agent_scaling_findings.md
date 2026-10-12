@@ -1,6 +1,6 @@
 # Why Hopper got worse with more agents, and the configuration that fixes it
 
-Investigation record, 2026-09-24 to 2026-10-07, written to be lifted into the report.
+Investigation record, 2026-09-24 to 2026-10-08.
 All numbers are deterministic evaluation return (10 episodes, every 25 iterations)
 unless stated otherwise. Supersedes the Hopper analysis in
 `final_configuration_and_findings.md` §3c, whose explanation ("Hopper's healthy
@@ -18,6 +18,12 @@ correctly.
 | ours, original configuration | 2362 ± 551 | 2018 ± 377 | 1621 ± 257 | 1587 ± 145 |
 | paper (FedNPG-ADMM, Table 2) | 1473 ± 383 | 2384 ± 371 | 2507 ± 230 | 2719 ± 173 |
 
+(Our row is the trailing-episode metric `ep_rew_mean`, averaged over each seed's
+last 500 iterations, with population sd. The final results use Table 2's own metric,
+`mean_episode_return` over the last 100 iterations with sample sd, under which
+the same runs read 2497 ± 635 / 2140 ± 386 / 1658 ± 273 / 1605 ± 159 (section
+9). Same runs, same conclusion; quote the Table 2-metric numbers.)
+
 ## 2. What was actually happening: learn, then collapse
 
 Deterministic evaluation showed that the paper's effect was reproduced early in
@@ -34,7 +40,7 @@ order is inverted. On seed 0, N=8 reached **3854 at iteration 575 with
 best Hopper number, and then decayed **51%** to 1870, with episodes shortening to
 ~410 steps. N=1 held ~3640 flat from iteration ~500 to 2000.
 
-Two consequences for the report:
+Two consequences:
 
 - The reported metric (mean of the last 100 iterations of *stochastic* training
   return over a 2000-iteration run) measured the collapsed policy, not the learned one.
@@ -42,7 +48,7 @@ Two consequences for the report:
   (1473) is well below a standard TRPO baseline on Hopper, so it probably never
   reaches the regime where the collapse appears.
 
-## 3. Cause: two of the "practical settings" we added
+## 3. Cause: two of the "practical settings" we added (a third also hurts)
 
 Our implementation added six settings on top of Algorithm 1, following the paper's
 statement that it uses "the practical settings in TRPO with line search, and in
@@ -122,7 +128,12 @@ numbers here are the record.)
 
 ## 5. Final configuration
 
-Table 4 values are unchanged in every environment.
+Table 4 values are unchanged in every environment. Hopper's fix removes
+**three** settings, not two: reward and advantage normalization (each causes
+the late collapse) and observation normalization (alone it never lets the
+policy reach the stable gait, 2000 at iteration 2000). Line search and the
+log-std clamp are also off but measured harmless; they are off only so the
+configuration is exactly the one measured.
 
 | setting | Hopper | Swimmer, Humanoid | in the paper? |
 |---|---|---|---|
@@ -140,8 +151,7 @@ measured as `test-hopper-iso-orthoinit` (3678, no decay), run as
 advantage normalization because each one causes its late collapse (§3). It
 turns off observation normalization because it stopped Hopper from reaching the
 stable gait. Line search and the clamp were harmless on Hopper; they are off
-there to keep the configuration exactly as measured. The report must state
-that the two configurations differ, and why.
+there to keep the configuration exactly as measured.
 
 ### Baselines (Figure 3) follow the same split
 
@@ -179,12 +189,12 @@ Each was refuted by measurement. None needs re-running.
 ## 7. Caveats
 
 - Every result in §3–4 is **one seed (0)**. The 5-seed final sweep is the
-  evidence for the report's tables; the tables above explain the configuration choice.
+  evidence for the final results; the tables above explain the configuration choice.
 - Within-run noise under the bare configuration is large: N=2 moved between 1218
-  and 3065 across evaluations of a single run. Report means and spread across
+  and 3065 across evaluations of a single run. Compare means and spread across
   seeds, not single checkpoints.
-- Report the configuration difference between environments explicitly. It is a
-  deviation from using one setup throughout, and it is justified by §3–4.
+- The configuration differs between environments. That is a deviation from
+  using one setup throughout, justified by §3–4.
 
 ## 8. Run ids
 
@@ -195,13 +205,13 @@ Each was refuted by measurement. None needs re-running.
 | isolation | `test-hopper-iso-{linesearch,obsnorm,rewnorm,advnorm,orthoinit,logstdclamp}` |
 | cross-environment checks | deleted 2026-10-07; numbers recorded in §4 |
 | refuted fixes | `hopper-fix-{critic,accept,eta}`, `diag-lam-N{1,2,8}`, `hopper-budget-N*` |
-| **report runs** | Hopper: `final-hopper-N{1,2,4,8}-s{0..4}`; Swimmer, Humanoid: `{swimmer,humanoid}-N{1,2,4,8}-s{0..4}` |
-| **report baselines** | Hopper: `final-hopper-{fednpg-standard,fedppo}-N8-s{0..4}`; Swimmer, Humanoid: `{swimmer,humanoid}-{fednpg-standard,fedppo}-N8-s{0..4}` |
+| **final runs** | Hopper: `final-hopper-N{1,2,4,8}-s{0..4}`; Swimmer, Humanoid: `{swimmer,humanoid}-N{1,2,4,8}-s{0..4}` |
+| **final baselines** | Hopper: `final-hopper-{fednpg-standard,fedppo}-N8-s{0..4}`; Swimmer, Humanoid: `{swimmer,humanoid}-{fednpg-standard,fedppo}-N8-s{0..4}` |
 
-## 9. Final five-seed results (2026-10-08, in the report)
+## 9. Final five-seed results (2026-10-08)
 
 Paper metric: mean of each seed's last 100 iterations of `mean_episode_return`,
-then mean ± sample sd over 5 seeds (same as Table 2 and the report's table).
+then mean ± sample sd over 5 seeds (same as the paper's Table 2).
 
 | Hopper-v4 | N=1 | N=2 | N=4 | N=8 |
 |---|---|---|---|---|
@@ -228,4 +238,4 @@ FedNPG-ADMM; cause not established. At equal cumulative uplink, FedPPO beats
 FedNPG-ADMM on Humanoid and loses on Hopper.
 
 The old Hopper baseline runs (`hopper-{fednpg-standard,fedppo}-N8-s*`) are
-superseded by `final-hopper-*` and are not used by the report.
+superseded by `final-hopper-*`.

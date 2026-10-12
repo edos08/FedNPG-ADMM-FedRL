@@ -1,11 +1,12 @@
-#!/opt/pyenv/versions/fednpg/bin/python
+#!/usr/bin/env python3
 """
 Progress/health check for runs in results/, for use while a sweep is going.
 
     ./sweep_status.py                 # every run touched in the last 24h
-    ./sweep_status.py hopper-bare     # only runs whose id contains this
+    ./sweep_status.py final-hopper    # only runs whose id contains this
     ./sweep_status.py --all           # every run on disk
-    ./sweep_status.py -w              # refresh every 30s
+    ./sweep_status.py -w              # refresh every 15s
+    ./sweep_status.py --sweep final-hopper   # plus whole-sweep ETA
 
 Answers the three questions a running sweep actually raises: is the process
 still alive, how far along is it, and is it producing something worth waiting
@@ -105,29 +106,17 @@ def expected_runs(target: str, seeds: list[str], agents: list[int]) -> list[tupl
     except Exception:  # package not importable from here; Table 4 values
         iters = {"swimmer": 1000, "hopper": 2000, "humanoid": 3000}
 
-    if target.startswith("final-"):
-        env = target[len("final-"):]
-        if env not in iters:
-            raise SystemExit(f"unknown sweep target: {target}")
+    if target == "final-hopper":        # final_sweep.sh hopper
         return [
-            (f"final-{env}-N{n}-s{s}", env, n, iters[env])
+            (f"final-hopper-N{n}-s{s}", "hopper", n, iters["hopper"])
             for s in seeds
             for n in agents
         ]
-    if target == "hopper":
+    if target in ("swimmer", "humanoid"):  # run_sweep.sh swimmer|humanoid
         return [
-            (f"hopper-bare-N{n}-s{s}", "hopper", n, iters["hopper"])
+            (f"{target}-N{n}-s{s}", target, n, iters[target])
             for s in seeds
             for n in agents
-        ]
-    if target == "isolate":
-        names = ["linesearch", "obsnorm", "rewnorm", "advnorm", "logstdclamp"]
-        return [(f"hopper-iso-{x}", "hopper", 8, iters["hopper"]) for x in names]
-    if target == "crosscheck":
-        return [
-            (f"{env}-bare-N{n}-s0", env, n, iters[env])
-            for env in ("swimmer", "humanoid")
-            for n in (1, 8)
         ]
     raise SystemExit(f"unknown sweep target: {target}")
 
@@ -136,7 +125,7 @@ def sweep_eta(target: str, seeds: list[str], agents: list[int], wave: int, live:
     """
     Wall-clock remaining for a whole sweep target, including runs not started.
 
-    Models what run_bare_sweep.sh actually does: at most `wave` trainings in
+    Models what the sweep runners actually do: at most `wave` trainings in
     flight, the next one starting as a slot frees. Greedy longest-first onto
     the earliest-free slot, which is how the real queue behaves closely enough
     for an estimate -- it is a planning number, not a guarantee, and it assumes
@@ -320,15 +309,18 @@ def main() -> None:
     p.add_argument("--all", action="store_true", help="include runs older than 24h")
     p.add_argument("-w", "--watch", action="store_true", help="refresh until interrupted (see --interval)")
     p.add_argument("--interval", type=float, default=15.0, help="seconds between refreshes (default: 15)")
-    p.add_argument("--sweep", choices=["final-hopper", "final-swimmer", "final-humanoid", "hopper", "isolate", "crosscheck"],
-                   help="also report wall-clock remaining for a whole run_bare_sweep.sh target, "
-                        "including runs it has not started yet")
-    p.add_argument("--seeds", default="0 1 2 3 4", help="seeds the sweep will cover (default: run_bare_sweep.sh's)")
+    p.add_argument("--sweep", choices=["final-hopper", "swimmer", "humanoid"],
+                   help="also report wall-clock remaining for a whole sweep, including runs not "
+                        "started yet: final-hopper (final_sweep.sh hopper) or swimmer/humanoid "
+                        "(run_sweep.sh)")
+    p.add_argument("--seeds", default="0 1 2 3 4", help="seeds the sweep will cover (default: 0-4)")
     p.add_argument("--agents", default="1 2 4 8", help="agent counts the sweep will cover")
-    p.add_argument("--wave", type=int, default=4, help="concurrent trainings, matching run_bare_sweep.sh's WAVE")
+    p.add_argument("--wave", type=int, default=None,
+                   help="concurrent trainings (default: one per seed for final-hopper, 1 for run_sweep.sh)")
     a = p.parse_args()
-    if a.sweep and a.sweep.startswith("final-") and "--wave" not in sys.argv:
-        a.wave = len(a.seeds.split())  # final_sweep.sh: one pane per seed
+    if a.wave is None:
+        # final_sweep.sh runs one tmux pane per seed; run_sweep.sh runs one at a time.
+        a.wave = len(a.seeds.split()) if a.sweep == "final-hopper" else 1
 
     if not a.watch:
         print(render(a.pattern, a.all, a))

@@ -9,8 +9,8 @@ environments, same normalization, same GAE, same pooled critic, same
 TRPO-style line search, same logged columns. That duplication is the point:
 the two arms must differ ONLY in how the server turns per-agent gradients
 into a step direction, or Figure 3's comparison measures the surrounding
-machinery instead of the algorithms. Sibling packages never import each
-other (see CLAUDE.md), and everything genuinely shareable already lives in
+machinery instead of the algorithms. `fednpg_admm` and `baselines` never import
+each other, and everything genuinely shareable already lives in
 `common` -- including common.optim, which both arms use for CG and the
 Fisher-vector product.
 """

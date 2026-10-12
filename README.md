@@ -1,185 +1,167 @@
-# FedNPG-ADMM — Communication-Efficient Federated Natural Policy Gradient
+# FedNPG-ADMM: communication-efficient federated natural policy gradient
 
-> **Status:** `fednpg_admm` (task ii) and `baselines` (task iii) are complete,
-> five seeds per configuration. **Swimmer-v4 reproduces Table 2 at every agent
-> count** (123.9/126.0/127.0/128.4 against the paper's 109.4/123.6/127.2/128.5),
-> and **Humanoid-v4 scales 993 -> 6329** from N=1 to N=8, both under the
-> original configuration. **Hopper-v4 uses its own configuration**: under the
-> original one, reward and advantage normalization made larger federations
-> collapse late in training and inverted the agent-count trend. With those
-> (and observation normalization, line search and the log-std clamp) turned
-> off, N=4/N=8 reach 2536/2656 against the paper's 2507/2719 and learn faster
-> than N=1/N=2. The per-environment settings, the isolation experiment and
-> the refuted hypotheses are in
-> [docs/hopper_agent_scaling_findings.md](docs/hopper_agent_scaling_findings.md);
-> the full configuration is in
-> [docs/final_configuration_and_findings.md](docs/final_configuration_and_findings.md).
-> Hopper runs are launched with `./final_sweep.sh hopper` (and
-> `hopper-baselines`); `./sweep_status.py` tracks progress. `quantization`
-> (task iv) has a stochastic-scheme sweep; `results_exporter` is still a stub.
-
-Course project reproducing and extending:
+A PyTorch reimplementation and extension of
 
 > G. Lan, H. Wang, J. Anderson, C. Brinton, V. Aggarwal, *"Improved
 > Communication Efficiency in Federated Natural Policy Gradient via
-> ADMM-based Gradient Updates"*, NeurIPS 2023. [arXiv:2310.19807](https://arxiv.org/abs/2310.19807)
+> ADMM-based Gradient Updates"*, NeurIPS 2023.
+> [arXiv:2310.19807](https://arxiv.org/abs/2310.19807)
+
+Federated natural policy gradient (FedNPG) normally needs every agent to send
+its local Fisher matrix, `d x d` values, to the server each round. FedNPG-ADMM
+writes the global natural-gradient direction as a consensus problem and solves
+it with one round of ADMM per iteration, so each agent sends two `d`-dimensional
+vectors instead, at the same convergence rate.
+
+This repository contains:
+
+- **FedNPG-ADMM** (Algorithm 1 of the paper), written from scratch.
+- **The paper's two baselines**: standard-average FedNPG, metered at its full
+  `O(d^2)` uplink, and federated PPO.
+- **Quantization of the agent-to-server uplink**, which the paper does not
+  study: stochastic uniform and reduced-precision float schemes, with sweeps
+  over bit width.
+- **A live dashboard** for monitoring runs.
+
+The full write-up, with derivations, results and figures, is
+[report.pdf](report.pdf).
 
 Authors: Edoardo Scarpel, Daniele Zebele.
 
----
+## Results
 
-## 1. What the paper actually does
+Final reward on MuJoCo, mean ± standard deviation over five seeds (each seed
+summarized by its mean over the last 100 iterations, as in the paper's
+Table 2). Paper values are from its Table 2, over ten seeds.
 
-Federated NPG (second-order, better convergence than PG/PPO) requires every
-agent to send its local Hessian $H_i ∈ R^{d×d}$ to the server every round —
-$O(d²)$ communication. **FedNPG-ADMM** reformulates the global NPG direction
-as a distributed quadratic problem solved via ADMM, so agents only ever
-transmit two $d$-dimensional vectors ($y_i$, $g_i$) — $O(d)$ communication —
-with the *same* convergence rate (Theorem 4.3) and *no* extra sample
-complexity. Empirically validated on Swimmer-v4 / Hopper-v4 / Humanoid-v4
-(MuJoCo).
+| Environment | Source | N=1 | N=2 | N=4 | N=8 |
+|---|---|---|---|---|---|
+| Swimmer-v4 | ours | 123.9 ± 2.3 | 126.0 ± 1.3 | 127.0 ± 0.8 | 128.4 ± 0.8 |
+| | paper | 109.4 ± 5.9 | 123.6 ± 10.3 | 127.2 ± 2.2 | 128.5 ± 1.9 |
+| Hopper-v4 | ours | 1941 ± 494 | 1636 ± 282 | 2536 ± 116 | 2656 ± 286 |
+| | paper | 1473 ± 383 | 2384 ± 371 | 2507 ± 230 | 2719 ± 173 |
+| Humanoid-v4 | ours | 993 ± 187 | 3391 ± 796 | 5343 ± 121 | 6329 ± 334 |
 
-## 2. What the professor actually wants
+- **Scaling with the number of agents.** More agents learn faster on all three
+  environments. On Swimmer and Humanoid the final reward also increases
+  monotonically with N; on Hopper, four and eight agents match the paper and
+  finish well above one and two.
+- **Baselines at N=8.** FedNPG-ADMM matches standard-average FedNPG on Hopper
+  (2656 ± 286 against 2494 ± 677) at 9219 times less uplink per round, and
+  exceeds it on Humanoid (6329 ± 334 against 4699 ± 298). FedPPO sends half as
+  much per round as FedNPG-ADMM and finishes below it on Hopper and Humanoid.
+- **Quantization.** At 8 bits, stochastic quantization keeps both the final
+  reward and the faster learning with more agents on Swimmer and Humanoid, for
+  a further 8x less uplink than the paper's 64-bit accounting. At 6 bits
+  Humanoid fails at every agent count.
 
-Straight from the email, turned into a checklist:
+Hopper runs with a reduced configuration: no reward, advantage or observation
+normalization, no line search and no log-std clamp. Swimmer and Humanoid use the
+standard TRPO and stable-baselines3 practical settings. See
+[docs/hopper_agent_scaling_findings.md](docs/hopper_agent_scaling_findings.md).
 
-- [ ] **(i)** Report section explaining the paper's main idea.
-- [x] **(ii)** Pseudocode for FedNPG-ADMM + a working implementation
-      (Algorithm 1 in the paper — agent-side ADMM update + server-side
-      aggregation). → `fednpg_admm` — **done**; see
-      [docs/final_configuration_and_findings.md](docs/final_configuration_and_findings.md)
-      for the final hyperparameters, the reproduction tables, and the
-      hypotheses tested and refuted along the way.
-- [ ] **(iii)** *If time allows:* one small state-space instance and one
-      large state-space instance, benchmarked against other FedRL methods —
-      at minimum standard-average FedNPG ($O(d²)$, eq. 12 in the paper),
-      ideally FedPPO too. → `baselines`
-- [ ] **(iv)** Quantize the agent→server transmissions and study performance
-      vs. quantization resolution. **Not in the original paper** — this is
-      the actual novel contribution of the project. → `quantization`
+## Installation
 
-Report deadline: 12 October 2026.
-
-## 3. Repo structure
-
-```
-FedNPG-ADMM-FedRL/
-├── README.md                      # this file
-├── pyproject.toml                 # root meta-package (installs everything)
-├── LICENSE
-└── src/
-    └── fedrl_comm/
-        ├── common/                # shared infra — envs, nets, rollout, comms, logging
-        │   ├── README.md
-        │   ├── pyproject.toml
-        │   └── src/common/
-        │       ├── envs/          # Gymnasium/MuJoCo env wrappers (Swimmer/Hopper/Humanoid)
-        │       ├── networks/      # policy MLP (per Table 4 of the paper)
-        │       ├── rollout/       # trajectory collection + GAE
-        │       ├── comms/         # agent<->server communication channel abstraction
-        │       │                  # (this is where quantization plugs in)
-        │       └── results/       # results schema + read/write helpers
-        │
-        ├── fednpg_admm/           # (ii): Algorithm 1 from the paper
-        │   ├── README.md
-        │   ├── pyproject.toml
-        │   └── src/fednpg_admm/
-        │       ├── agent.py       # agent-side ADMM update (Algo 1, lines 5-9)
-        │       ├── server.py      # server-side aggregation (Algo 1, lines 11-13)
-        │       └── train.py       # CLI: fedrl-train-admm
-        │
-        ├── baselines/             # (iii): the competing FedRL algorithms
-        │   ├── README.md
-        │   ├── pyproject.toml
-        │   └── src/baselines/
-        │       ├── fednpg_standard.py  # standard-average FedNPG, eq. 12 (O(d²))
-        │       ├── fedppo.py           # first-order baseline
-        │       └── train.py            # CLI: fedrl-train-baseline
-        │
-        ├── quantization/          # (iv): the novel part — not in the paper
-        │   ├── README.md
-        │   ├── pyproject.toml
-        │   └── src/quantization/
-        │       ├── quantizers.py  # quantization schemes, pluggable into common/comms
-        │       └── sweep.py       # CLI: fedrl-quantize-sweep
-        │
-        ├── results_webapp/        # live dashboard while experiments run
-        │   ├── README.md
-        │   ├── pyproject.toml
-        │   └── src/results_webapp/
-        │       ├── app.py         # CLI: fedrl-results-webapp
-        │       ├── data_loader.py
-        │       └── plotting.py
-        │
-        └── results_exporter/      # static tables/figures for the actual report
-            ├── README.md
-            ├── pyproject.toml
-            └── src/results_exporter/
-                ├── export.py      # CLI: fedrl-export-results
-                ├── tables.py       # LaTeX table generation
-                └── figures.py      # camera-ready plots
-```
-
-## 4. Setup
+Python 3.11 or later. Each component is its own package under
+`src/fedrl_comm/`, and they must be installed together, in one command:
 
 ```bash
 git clone https://github.com/edos08/FedNPG-ADMM-FedRL
 cd FedNPG-ADMM-FedRL
-# Activate your Python venv of choice, then:
 pip install -e . \
   -e src/fedrl_comm/common \
   -e src/fedrl_comm/baselines \
   -e src/fedrl_comm/fednpg_admm \
   -e src/fedrl_comm/quantization \
-  -e src/fedrl_comm/results_webapp \
-  -e src/fedrl_comm/results_exporter
+  -e src/fedrl_comm/results_webapp
 ```
 
-The root `fedrl-comm` package (see root `pyproject.toml`) depends on all six
-sub-packages by name, but those names aren't published anywhere — they only
-resolve because every sub-package's local path is *also* passed with `-e` in
-this same `pip install` invocation, so pip's resolver satisfies each
-dependency from the local editable candidate instead of trying (and failing)
-to fetch it from PyPI. **`pip install -e .` alone will NOT work** — it needs
-every `-e <path>` above in the same command.
+The sub-packages are not published on PyPI. Passing every local path in the
+same `pip install` lets pip resolve them against each other; `pip install -e .`
+alone does not install them. The packages pin `torch==2.11.0`; install the
+build that matches your CUDA version first if you plan to use a GPU (for these
+small policies the CPU is usually faster).
 
-Verify install:
+## Usage
 
 ```bash
-fedrl-train-admm --help
-fedrl-train-baseline --help
-fedrl-quantize-sweep --help
-fedrl-results-webapp --help
-fedrl-export-results --help
+# FedNPG-ADMM
+fedrl-train-admm --env swimmer --num-agents 8 --seed 0
+
+# baselines
+fedrl-train-baseline --algo fednpg-standard --env swimmer --num-agents 8 --seed 0
+fedrl-train-baseline --algo fedppo          --env swimmer --num-agents 8 --seed 0
+
+# quantization
+fedrl-quantize-sweep --env swimmer --scheme stochastic --bits 4,6,8,32
+python scripts/run_grid.py --env humanoid --num-seeds 5 --agents 2,4,8 --bits 6,8
+
+# live dashboard
+fedrl-results-webapp --results-path results --port 8050
 ```
 
-(All of these will currently just tell you they're not implemented yet —
-that's expected at this stage. The point is that the packaging plumbing
-works *now*, before anyone's written a line of algorithm code, so nobody
-loses a day later debugging `pyproject.toml` instead of debugging ADMM.)
+`--env` is `swimmer`, `hopper` or `humanoid` and loads that environment's
+hyperparameters from the paper's Table 4; every one of them can be overridden
+on the command line (`--help` lists them). Runs are written to
+`results/<run-id>/` as `metadata.json` and `metrics.csv`.
 
-## 5. Package details
+### Reproducing the results
 
-| Package | Depends on | CLI | Maps to task |
-|---|---|---|---|
-| `common` | — | — (library only) | shared infra |
-| `fednpg_admm` | `common` | `fedrl-train-admm` | (ii) |
-| `baselines` | `common` | `fedrl-train-baseline` | (iii) |
-| `quantization` | `common` | `fedrl-quantize-sweep` | (iv) |
-| `results_webapp` | `common` | `fedrl-results-webapp` | live monitoring |
-| `results_exporter` | `common` | `fedrl-export-results` | report figures/tables |
+```bash
+./run_sweep.sh swimmer            # FedNPG-ADMM, 5 seeds x N = 1, 2, 4, 8
+./run_sweep.sh humanoid
+./run_sweep.sh base-swimmer       # baselines at N=8
+./run_sweep.sh base-humanoid
 
-## 6. Suggested rough milestones (edit or delete freely — this is a guess, not a commitment either of us made to Subhra)
+./final_sweep.sh hopper           # Hopper, in its reduced configuration
+./final_sweep.sh hopper-baselines
+./final_sweep.sh hopper-quant
 
-- Weeks 1–2: `common` (envs + policy net + rollout) working end to end with
-  a *single* non-federated NPG update, just to validate the RL plumbing.
-- Weeks 3–4: `fednpg_admm` (Algorithm 1) + `baselines` (eq. 12 standard
-  average) running on the small state-space env, results matching the
-  paper's Fig. 2 qualitatively.
-- Week 5: large state-space env, `quantization` sweep.
-- Week 6: `results_exporter`, report writing, buffer for whatever broke.
+./sweep_status.py --sweep final-hopper   # progress, liveness and ETA
+```
 
-## 7. Citation
+`final_sweep.sh` opens a tmux session with one pane per seed and live progress
+bars. Both runners skip completed runs, so they can be restarted after an
+interruption. A Humanoid run at N=8 takes several hours on CPU.
+
+## Repository layout
+
+```
+.
+├── README.md
+├── report.pdf              # full write-up
+├── pyproject.toml          # root package, depends on the five below
+├── run_sweep.sh            # Swimmer and Humanoid sweeps
+├── final_sweep.sh          # Hopper sweeps
+├── sweep_status.py         # progress and ETA for running sweeps
+├── scripts/run_grid.py     # seeds x agents x bit widths
+├── docs/                   # theory notes and experiment records
+└── src/fedrl_comm/
+    ├── common/             # envs, networks, rollout, optimizers, comms, results
+    ├── fednpg_admm/        # Algorithm 1: fedrl-train-admm
+    ├── baselines/          # standard-average FedNPG, FedPPO: fedrl-train-baseline
+    ├── quantization/       # uplink quantization: fedrl-quantize-sweep
+    └── results_webapp/     # live dashboard: fedrl-results-webapp
+```
+
+Each package has its own README. Every agent-to-server transmission goes
+through `common.comms.Channel`, which counts bytes the same way for all
+algorithms and is where the quantizers plug in.
+
+## Documentation
+
+- [docs/npg_admm_theory_and_implementation.md](docs/npg_admm_theory_and_implementation.md):
+  the theory behind NPG and FedNPG-ADMM, mapped onto the code.
+- [docs/final_configuration_and_findings.md](docs/final_configuration_and_findings.md):
+  the configuration of every environment and the measurements behind it.
+- [docs/hopper_agent_scaling_findings.md](docs/hopper_agent_scaling_findings.md):
+  why Hopper uses a different configuration.
+- [docs/quantization_report.md](docs/quantization_report.md): how the
+  quantization works, with results (in Italian).
+
+## Citation
+
+If you use this code, please cite the original paper:
 
 ```bibtex
 @inproceedings{lan2023fednpgadmm,
@@ -193,7 +175,6 @@ loses a day later debugging `pyproject.toml` instead of debugging ADMM.)
 }
 ```
 
-## 8. License
+## License
 
-MIT — see `LICENSE`. Course project; adjust if your department wants
-something else.
+MIT; see [LICENSE](LICENSE).

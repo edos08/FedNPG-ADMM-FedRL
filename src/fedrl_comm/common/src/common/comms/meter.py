@@ -1,6 +1,6 @@
 """
-Byte accounting for the O(d) vs O(d^2) communication comparison the report
-hinges on.
+Byte accounting for the O(d) vs O(d^2) communication comparison the
+project's results hinge on.
 
 Counts are per-agent, matching the paper: Figure 3's caption says overhead
 is "measured by the transmitted bytes in each agent" — not summed across
@@ -86,9 +86,8 @@ class ByteMeter:
         return out
 
     def bytes_by_iteration(self) -> dict[int, float]:
-        """Per-iteration totals, for a comm-overhead-vs-iteration curve
-        later (results_exporter/results_webapp territory — not built yet,
-        this just needs to exist as raw data for them to consume)."""
+        """Per-iteration totals, the raw data behind the
+        comm-overhead-vs-iteration curves (see results_webapp)."""
         out: dict[int, float] = {}
         for r in self._log:
             if r.iteration is None:

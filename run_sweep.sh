@@ -1,79 +1,68 @@
 #!/usr/bin/env bash
-# Sweep runner: one invocation per tmux session.
-#   ./run_sweep.sh swimmer|hopper|humanoid   -> FedNPG-ADMM, all agent counts
-#   ./run_sweep.sh npg                       -> plain-TRPO baselines, all envs
+# Swimmer and Humanoid sweeps, in the configuration the published results use.
+#
+#   ./run_sweep.sh swimmer|humanoid          FedNPG-ADMM, every agent count
+#   ./run_sweep.sh base-swimmer|base-humanoid  standard-average FedNPG + FedPPO, N=8
+#
+# Hopper uses a reduced configuration and has its own runner: final_sweep.sh.
+#
+# Environment overrides: SEEDS (default "0 1 2 3 4"), AGENTS (default
+# "1 2 4 8"), DEVICE (default cpu). Runs go to ./results/<run-id>/.
 #
 # Resumable: a run whose metadata.json already has completed_at is skipped,
 # so re-running after a crash or a reboot picks up where it left off.
 set -u
-TARGET="${1:?usage: run_sweep.sh swimmer|hopper|humanoid|npg|base-<env>}"
-SEEDS="${SEEDS:-0 1 2}"
+TARGET="${1:?usage: run_sweep.sh swimmer|humanoid|base-swimmer|base-humanoid}"
+SEEDS="${SEEDS:-0 1 2 3 4}"
 AGENTS="${AGENTS:-1 2 4 8}"
-# CPU, not CUDA. Measured on this machine: 6.49 vs 22.60 s/iter on Swimmer,
-# 4.03 vs 11.37 on Hopper, 5.47 vs 6.59 on Humanoid, all at N=8. The policies
-# are small and MuJoCo stepping is CPU-bound, so the GPU only adds per-timestep
-# launch overhead -- GAE alone runs 30x slower on it.
+# CPU by default. The policies are small and MuJoCo stepping is CPU-bound, so
+# a GPU mostly adds per-step launch overhead; on our machine CPU was faster
+# on all three environments at N=8.
 DEVICE="${DEVICE:-cpu}"
 EVAL="--eval-interval 25 --eval-episodes 10 --save-checkpoint"
 
-# Four trainings run concurrently and every N=8 run forks 8 env subprocesses.
-# Without this, each torch process grabs all 46 cores and they thrash each
-# other -- MuJoCo stepping is CPU-bound, so oversubscription costs real
-# wall-clock.
-# Measured 3.84-4.17 s/iter from OMP=1 to OMP=8: this workload is not
-# thread-parallel, so extra threads buy nothing and only crowd out other jobs.
-# Four concurrent runs at OMP=1 showed under 2% interference.
+# One thread per training: the workload is not thread-parallel, and several
+# concurrent runs (each forking N environment processes) otherwise
+# oversubscribe the CPU.
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 
-ADMM_DIR=/mnt/edoardo/FedNPG-ADMM-FedRL
-NPG_DIR=/mnt/edoardo/NPG
+cd "$(dirname "${BASH_SOURCE[0]}")"
 
-done_already() {  # $1 = results dir, $2 = run id
-  [ -f "$1/$2/metadata.json" ] && grep -q '"completed_at"' "$1/$2/metadata.json"
+done_already() {  # $1 = run id
+  [ -f "results/$1/metadata.json" ] && grep -q '"completed_at"' "results/$1/metadata.json"
 }
 
-if [ "${TARGET#base-}" != "$TARGET" ]; then
-  # Figure 3 baselines for one environment: standard-average FedNPG and FedPPO.
-  # N is fixed at 8 because that is what the paper fixes for that comparison.
-  env="${TARGET#base-}"
-  cd "$ADMM_DIR"
-  for s in $SEEDS; do
-    for algo in fednpg-standard fedppo; do
-      id="${env}-${algo}-N8-s${s}"
-      done_already results "$id" && { echo "[skip] $id"; continue; }
-      echo "=== $(date '+%F %T')  start $id ==="
-      fedrl-train-baseline --algo "$algo" --env "$env" --num-agents 8 --seed "$s" \
-        --device "$DEVICE" --save-checkpoint --run-id "$id"
+case "$TARGET" in
+  hopper|base-hopper)
+    echo "Hopper uses its own configuration: run ./final_sweep.sh hopper" \
+         "(or hopper-baselines) instead." >&2
+    exit 2
+    ;;
+  base-swimmer|base-humanoid)
+    # The paper compares the three methods at N=8.
+    env="${TARGET#base-}"
+    for s in $SEEDS; do
+      for algo in fednpg-standard fedppo; do
+        id="${env}-${algo}-N8-s${s}"
+        done_already "$id" && { echo "[skip] $id"; continue; }
+        echo "=== $(date '+%F %T')  start $id ==="
+        fedrl-train-baseline --algo "$algo" --env "$env" --num-agents 8 --seed "$s" \
+          --device "$DEVICE" $EVAL --run-id "$id"
+      done
     done
-  done
-elif [ "$TARGET" = npg ]; then
-  cd "$NPG_DIR"
-  for s in $SEEDS; do
-    for env in swimmer hopper humanoid; do
-      # Table 4 sets rho = 0.01 for Humanoid and 0.1 elsewhere. fedrl-train-admm
-      # reads that per --env and uses it as the CG damping too; npg_trpo is a
-      # separate project whose --damping defaults to SB3's 0.1, so Humanoid has
-      # to be matched by hand or the with/without-ADMM comparison silently
-      # differs in the damping as well as in the algorithm.
-      damping=0.1; [ "$env" = humanoid ] && damping=0.01
-      id="${env}-npg-s${s}"
-      done_already results "$id" && { echo "[skip] $id"; continue; }
-      echo "=== $(date '+%F %T')  start $id  (damping $damping) ==="
-      npg-train --env "$env" --seed "$s" --device "$DEVICE" --damping "$damping" \
-        $EVAL --run-id "$id"
+    ;;
+  swimmer|humanoid)
+    for s in $SEEDS; do
+      for n in $AGENTS; do
+        id="${TARGET}-N${n}-s${s}"
+        done_already "$id" && { echo "[skip] $id"; continue; }
+        echo "=== $(date '+%F %T')  start $id ==="
+        fedrl-train-admm --env "$TARGET" --num-agents "$n" --seed "$s" \
+          --device "$DEVICE" $EVAL --run-id "$id"
+      done
     done
-  done
-else
-  cd "$ADMM_DIR"
-  for s in $SEEDS; do
-    for n in $AGENTS; do
-      id="${TARGET}-N${n}-s${s}"
-      done_already results "$id" && { echo "[skip] $id"; continue; }
-      echo "=== $(date '+%F %T')  start $id ==="
-      fedrl-train-admm --env "$TARGET" --num-agents "$n" --seed "$s" \
-        --device "$DEVICE" $EVAL --run-id "$id"
-    done
-  done
-fi
+    ;;
+  *) echo "unknown target: $TARGET" >&2; exit 2 ;;
+esac
 echo "=== $(date '+%F %T')  $TARGET sweep finished ==="

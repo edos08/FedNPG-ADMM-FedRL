@@ -1,6 +1,6 @@
 # Quantizzazione in FedNPG-ADMM — come funziona
 
-Questo documento descrive il pacchetto `src/fedrl_comm/quantization` (task iv):
+Questo documento descrive il pacchetto `src/fedrl_comm/quantization`:
 cosa viene quantizzato, con quali schemi, come si misurano i byte e come si
 lancia lo sweep sui bit-width. Non è nel paper originale (che cita Q-GADMM [9]
 solo come lavoro correlato), quindi non c'è una figura di riferimento.
@@ -254,32 +254,15 @@ I run finiscono in `results/` e si vedono nella dashboard
 
 ---
 
-## 6. Cosa produrre per il report
+## 6. Punti aperti e cose da sistemare
 
-Per ogni schema (e idealmente anche per il baseline FedNPG standard, quando ci
-sarà):
-
-1. curve reward-vs-iterazioni sovrapposte per ogni bit-width;
-2. reward finale vs bit-width (asse x = bit, asse y = reward);
-3. byte di comunicazione vs bit-width, per mostrare cosa si "compra" con la
-   perdita di accuratezza.
-
-Da aspettarsi, qualitativamente:
-
-- **stochastic**: degrado graduale al calare di `b`. Anche a 1–2 bit l'algoritmo
-  può ancora convergere, perché non è distorto, ma più lentamente e con più
-  rumore.
-- **float**: 16 bit praticamente identico a 32. 8 bit sensibile all'underflow
-  (vedi §3.2). 4 bit scalato è grossolano ma non collassa a zero.
-
----
-
-## 7. Punti aperti e cose da sistemare
-
-- `quantization/__init__.py` dice ancora "Not implemented yet": il docstring è
-  obsoleto.
 - `--algo fednpg-standard` non è ancora supportato: serve `baselines/fednpg_standard.py`
-  con un `train(args, channel_factory=...)` equivalente.
+  con un `train(args, channel_factory=...)` equivalente. *(Al 2026-10-09
+  `baselines/fednpg_standard.py` esiste, ma `train()` in `baselines/train.py`
+  non accetta ancora un `channel_factory` e lo sweep ammette solo
+  `--algo fednpg-admm`; analiticamente: a $b$ bit il metodo
+  standard pareggia ADMM non quantizzato solo per $b \approx 128/d$, cioè
+  ~0.03 bit su Swimmer.)*
 - Con `--scheme stochastic --bits 32`, `2^32 − 1` livelli in aritmetica float32
   superano la precisione della mantissa. La parte frazionaria è di fatto 0, quindi
   l'arrotondamento diventa deterministico ed equivale circa a float32. Va bene
@@ -287,12 +270,55 @@ Da aspettarsi, qualitativamente:
   stretto.
 - Lo sweep non espone `--admm-rounds`: con `R > 1` i byte di `y_i` crescono
   linearmente con `R`.
-- `pyproject.toml` dei pacchetti dichiara `torch==2.11.0`, mentre
-  `commands.txt` dice che torch è pinnato a 2.4.1 per le GPU Pascal/Volta:
-  controlla quale versione è installata davvero (`float8_e4m3fn` esiste da
-  torch 2.1, quindi va bene con entrambe).
 
-
-
-## 8. Note quando si usa troppa quantization:
+## 7. Note quando si usa troppa quantization:
 [fednpg_admm_quant_stochastic_6bit_swimmer_8agents_20260924_142800] iter 851: step skipped ((sum g_i)^T y = -0.00211088 is non-positive -- the trust-region step size sqrt(2*N*delta/denom) is undefined. The aggregated ADMM direction isn't an ascent direction this round. Algorithm 1 as written has no fallback for this (no line search). Most common early in training with a badly-fit critic producing noisy advantages -- check critic_loss in the results before assuming the ADMM/CG code is wrong.)
+
+## 8. Risultati (aggiornato 2026-10-09)
+
+Run quantizzati (`scripts/run_grid.py`) confrontati con i run non quantizzati
+della stessa configurazione e degli stessi seed (`run_sweep.sh`; i run Swimmer a N=1 delle due codebase coincidono cifra per cifra).
+Metrica: media delle ultime 100 iterazioni di `mean_episode_return`
+per seed, poi media ± deviazione standard campionaria sui 5 seed.
+
+### 8.1 Griglia a 5 seed (stochastic, 6 e 8 bit)
+
+| Ambiente | N | 64 bit | 8 bit | 6 bit |
+|---|---|---|---|---|
+| Swimmer | 2 | 126.0 ± 1.3 | 126.1 ± 0.8 | 128.9 ± 7.4 |
+| Swimmer | 4 | 127.0 ± 0.8 | 127.1 ± 0.5 | 125.8 ± 3.4 |
+| Swimmer | 8 | 128.4 ± 0.8 | 128.6 ± 0.4 | 127.8 ± 0.7 |
+| Humanoid | 2 | 3391 ± 796 | 2956 ± 593 | 497 ± 34 |
+| Humanoid | 4 | 5343 ± 121 | 5244 ± 237 | 676 ± 73 |
+| Humanoid | 8 | 6329 ± 334 | 5997 ± 259 | 1514 ± 526 |
+| Hopper (config. originale) | 2 | 2140 ± 386 | 1901 ± 593 | 1573 ± 817 |
+| Hopper (config. originale) | 4 | 1658 ± 273 | 1755 ± 302 | 1853 ± 551 |
+| Hopper (config. originale) | 8 | 1605 ± 159 | 1713 ± 150 | 1837 ± 248 |
+
+- **8 bit**: indistinguibile da 64 bit su Swimmer; su Humanoid entro circa una
+  deviazione standard. Più agenti continuano ad apprendere più in fretta a ogni
+  checkpoint (Humanoid, iterazione 1000: 580/905/3428 per N=2/4/8, contro
+  602/944/3863 non quantizzato). Riduzione ulteriore di 8x sull'uplink.
+- **6 bit**: Humanoid crolla a ogni N (5 seed, quindi non è rumore tra seed).
+  Swimmer tiene il reward finale ma con più varianza a N=2/4, e all'inizio
+  N=4 apprende più lentamente di N=2 (iterazione 100: 75 contro 95).
+- **5 bit** (Humanoid, 1 seed): 303 / 349 / 427 a N=2/4/8.
+
+### 8.2 Scansione a 1 seed sui bit (N=8)
+
+Swimmer: 94.4 a 5 bit, poi 127.7-128.7 da 6 a 32 bit. Humanoid: 1991 a 6 bit,
+5543 a 7, 6073 a 24. La soglia sale con $d$ (Humanoid, $d \approx 7.3\times10^5$,
+richiede un bit in più di Swimmer, $d = 4868$), coerente con un quantizzatore
+non distorto la cui varianza entra in una somma $d$-dimensionale. Punto di
+lavoro che regge ovunque: **8 bit**.
+
+### 8.3 Hopper
+
+Tutti i run Hopper qui sopra usano la configurazione *originale*, mentre i run
+Hopper finali (`final-hopper-*`) usano quella ridotta (normalizzazioni,
+line search e clamp disattivati; vedi `docs/hopper_agent_scaling_findings.md`).
+Nella configurazione originale la quantizzazione a 6 e 8 bit non cambia nulla
+oltre la variabilità tra seed, e riproduce il trend invertito di quella
+configurazione. La griglia Hopper nella configurazione ridotta è in corso
+(`./final_sweep.sh hopper-quant`, risultati in `results/hopper-quant/`).
+

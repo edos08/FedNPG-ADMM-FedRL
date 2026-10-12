@@ -1,46 +1,42 @@
 # common
 
-> 🚧 Not implemented. This README describes the *plan*, not current behavior.
+Shared library used by every other package. It has no CLI. `fednpg_admm`,
+`baselines` and `quantization` differ only in how the server turns the agents'
+messages into a policy update, so everything else lives here once.
 
-Shared library used by every other package in this project. No CLI — this
-is imported, not run. If you find yourself copy-pasting an env wrapper or a
-policy network between `fednpg_admm` and `baselines`, it belongs here
-instead.
-
-## Planned contents
+## Contents
 
 ```
 src/common/
-├── envs/       # thin wrappers around gymnasium.make() for Swimmer-v4 /
-│               # Hopper-v4 / Humanoid-v4 (paper's Table 3), plus whatever
-│               # small-state-space env we pick for task (iii)
-├── networks/   # policy MLP: architecture + activation per paper's Table 4
-│               # (64x64 ReLU/Tanh for Swimmer, up to 512x512x512 for Humanoid)
-├── rollout/    # trajectory collection + advantage estimation (GAE, γ=0.99
-│               # per Table 4) — shared by every algorithm variant
-├── comms/      # THE important one: an abstraction for "agent sends X to
-│               # server" that every algorithm routes through. This is
-│               # where `quantization` plugs in later without needing to
-│               # touch fednpg_admm or baselines code at all.
-└── results/    # results schema (what gets written to disk after a run)
-                # + read helpers, shared by results_webapp and
-                # results_exporter so they don't diverge on format
+├── envs/          # Gymnasium/MuJoCo env factory (Swimmer-v4, Hopper-v4,
+│                  # Humanoid-v4), per-agent vector env, and running
+│                  # observation/reward normalization (normalize.py)
+├── networks/      # Gaussian MLP policy and value network (Table 4 of the
+│                  # paper: hidden sizes, ReLU hidden layers, Tanh mean head)
+├── rollout/       # parallel rollout collection across agents, batch
+│                  # container, GAE and critic fitting
+├── optim/         # conjugate gradient, Fisher-vector products, TRPO-style
+│                  # backtracking line search
+├── comms/         # Channel and ByteMeter: every agent->server transmission
+│                  # goes through a Channel, which applies an optional
+│                  # Transform (quantization plugs in here) and counts bytes
+├── results/       # run directory schema: metadata.json + metrics.csv,
+│                  # written incrementally during training
+├── hyperparams.py # Table 4 values per environment
+├── evaluation.py  # deterministic evaluation and checkpoints
+└── device.py      # device selection and validation
 ```
 
-## Why this exists as its own package
+## Byte accounting
 
-`fednpg_admm` and `baselines` both need: an environment, a policy network,
-a rollout collector, and a way to send vectors/matrices from N agents to a
-server. The only thing that actually differs between them is the *update
-rule*. Without this package, that infra gets duplicated (or worse, drifts
-apart) between the two algorithm packages, and you end up debugging two
-slightly-different rollout collectors instead of one.
+`ByteMeter` counts `(number of elements, bits per element)` rather than reading
+the tensor's in-memory size. Unquantized sends are counted at 64 bits per value,
+the convention of the paper, and a quantizing `Transform` reports its own bit
+width, so the communication numbers of every algorithm come from the same code.
+`Channel.send()` returns the possibly degraded tensor, and callers must use that
+return value, so the server aggregates exactly what was transmitted.
 
 ## Installation
 
-```bash
-cd common
-pip install -e .
-```
-
-Or from repo root: `pip install -e src/fedrl_comm/common`.
+Installed together with the other packages from the repository root; see the
+main [README](../../../README.md#installation).

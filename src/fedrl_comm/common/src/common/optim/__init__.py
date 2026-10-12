@@ -6,7 +6,7 @@ These live in `common` rather than inside `fednpg_admm` because the
 Fisher-vector product to implement standard-average FedNPG (paper eq. 12),
 and sibling packages deliberately never import each other -- a duplicated
 copy would be two things to keep in sync, and any drift between them would
-silently invalidate the comparison the whole report rests on.
+silently invalidate the comparison between the two methods.
 """
 
 from .cg import conjugate_gradient

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fedrl-quantization"
 version = "0.1.0"
-description = "Task (iv): quantize agent-to-server transmissions and study performance vs. quantization resolution"
+description = "Quantization of FedNPG-ADMM agent-to-server transmissions: stochastic and reduced-precision float schemes, with bit-width sweeps"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

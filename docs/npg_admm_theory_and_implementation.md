@@ -346,7 +346,8 @@ run of this repo's code.
 ## 10. Package map and the flat-parameter convention
 
 ```
-common (only shared dependency) <── fednpg_admm, baselines, quantization, results_webapp, results_exporter
+common (shared by all) <── fednpg_admm, baselines, quantization, results_webapp
+fednpg_admm             <── quantization   (train(channel_factory=...) hook)
 ```
 
 `fednpg_admm`'s own files map directly onto Part I:
@@ -674,7 +675,7 @@ normally, so the ADMM state doesn't freeze.
 
 `common/comms/channel.py`'s `Channel` is the one chokepoint every algorithm in this repo routes
 agent→server tensor sends through — this exists purely so the $O(d)$ vs $O(d^2)$ comparison the
-whole report hinges on is measured **identically** regardless of which algorithm (`fednpg_admm`
+whole project hinges on is measured **identically** regardless of which algorithm (`fednpg_admm`
 vs. future `baselines`) is sending. `channel.send(name, tensor, iteration)` applies a `Transform`
 (identity by default — a no-op that returns `(tensor, None)`), records the resulting size on a
 `ByteMeter`, and returns the (possibly-transformed) tensor. `train.py` sends both ADMM outputs

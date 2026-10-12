@@ -1,8 +1,17 @@
 # Final configuration and reproduction findings (single-agent Hopper)
 
 Written 2026-09-24, closing the N=1 investigation. Everything here is measured on
-this repo's own runs unless a citation says otherwise. Intended as raw material
-for the report's experimental section.
+this repo's own runs unless a citation says otherwise.
+
+> **Status, 2026-10-09.** Sections 1-4 describe the *original* configuration and
+> remain accurate as a record of it. Section 3c's multi-seed tables and its
+> "Hopper fails to scale" conclusion were superseded: the cause was found
+> (reward and advantage normalization) and Hopper now runs with its own
+> configuration. Section 3c below now gives the final five-seed numbers; the
+> investigation itself is in
+> [hopper_agent_scaling_findings.md](hopper_agent_scaling_findings.md).
+> Section 5's configuration table is per environment, and section 6 lists what is
+> actually still open.
 
 ## 1. Headline result
 
@@ -132,46 +141,37 @@ stochastic MuJoCo policy as bimodal, or (b) documents per-dimension `log_std`
 divergence in TRPO/PPO without an entropy bonus. Both should be presented as our
 own measurements rather than cited.
 
-## 3c. Multi-seed results, and why Hopper alone fails to scale
+## 3c. Multi-seed results (final, five seeds)
 
-Final rewards, paper metric (mean of each seed's last 100 iterations), then
-mean +- standard deviation **across seeds** -- the same quantity Table 2 reports.
+Metric: mean of each seed's last 100 iterations of `mean_episode_return`,
+then mean +- sample sd over seeds 0-4 -- the quantity Table 2 of the paper
+reports. Swimmer and Humanoid use the original configuration; Hopper uses the
+Hopper configuration (section 5). Runs: `{swimmer,humanoid}-N{n}-s{0..4}` and
+`final-hopper-N{n}-s{0..4}`.
 
-| | N=1 | N=2 | N=4 | N=8 | seeds |
-|---|---|---|---|---|---|
-| **Swimmer** ours | 94.7 +- 44.0 | **126.1 +- 1.0** | **127.1 +- 0.8** | **128.3 +- 0.7** | 8-9 |
-| Swimmer paper | 109.4 +- 5.9 | 123.6 +- 10.3 | 127.2 +- 2.2 | 128.5 +- 1.9 | 10 |
-| **Hopper** ours | **2165 +- 705** | 1987 +- 396 | 1719 +- 234 | 1611 +- 145 | 8-9 |
-| Hopper paper | 1473 +- 383 | 2384 +- 371 | 2507 +- 230 | 2719 +- 173 | 10 |
-| **Humanoid** ours | 945 +- 178 | 3456 +- 901 | 5348 +- 168 | **6212 +- 397** | 9-10 |
+| | N=1 | N=2 | N=4 | N=8 |
+|---|---|---|---|---|
+| **Swimmer** ours | 123.9 +- 2.3 | 126.0 +- 1.3 | 127.0 +- 0.8 | 128.4 +- 0.8 |
+| Swimmer paper | 109.4 +- 5.9 | 123.6 +- 10.3 | 127.2 +- 2.2 | 128.5 +- 1.9 |
+| **Hopper** ours | 1941 +- 494 | 1636 +- 282 | 2536 +- 116 | 2656 +- 286 |
+| Hopper paper | 1473 +- 383 | 2384 +- 371 | 2507 +- 230 | 2719 +- 173 |
+| **Humanoid** ours | 993 +- 187 | 3391 +- 796 | 5343 +- 121 | 6329 +- 334 |
 
-**Swimmer reproduces the paper at N>=2 and beats its seed variance** (+-0.7 vs
-+-1.9 at N=8). At N=1 our 94.7 +- 44.0 is bimodal across seeds -- six of nine
-reach ~123 while three fall into Swimmer's known local optimum
-(45, 15, 54). Two or more agents eliminate that failure entirely.
+- **Swimmer** is inside the paper's spread at N=2/4/8 and above it at N=1, with
+  smaller seed variance at every agent count. No N=1 seed falls into Swimmer's
+  local optimum (per-seed 120.9-126.0). More agents learn faster at every
+  checkpoint (training return at iteration 50: 32/50/65/102 for N=1/2/4/8).
+- **Humanoid** is absent from the paper's Table 2; it scales 6.4x from N=1 to
+  N=8, monotonically, and faster with more agents throughout.
+- **Hopper** (Hopper configuration) matches the paper within one sd at N=4 and
+  N=8 and learns faster with more agents early on (smoothed training return at
+  iteration 100: 598/638/986/1092). It is not strictly monotone: N=2 finishes
+  below N=1, inside the seed spread. Five seeds resolve two groups, {1, 2} and
+  {4, 8}.
 
-**Humanoid scales 6.6x** from N=1 to N=8, monotonically.
-
-**Hopper is the single reproduction failure**: monotonically *decreasing* in N
-where the paper increases. Our N=1 exceeds the paper's (2165 vs 1473); our N=8
-reaches 1611 against their 2719.
-
-The per-seed values expose one mechanism behind all three:
-
-```
-swimmer N=1: 121 125 125 126  45 122  15 119  54   <- trimodal, 3 seeds stuck
-hopper  N=1: 2895 1562 3244 2392 2391 1226 2493 1271 2013   <- wide, sometimes escapes
-hopper  N=8: 1664 1585 1367 1805 1603 1460 1641 1764 1424   <- tight, always the same optimum
-```
-
-More agents reduce gradient noise, so training converges more *consistently* --
-seed std falls from 44.0 to 0.7 on Swimmer and 705 to 145 on Hopper. **Whether
-that helps depends on which basin the reduced exploration settles into.** On
-Swimmer and Humanoid it reliably avoids the bad optimum; on Hopper it reliably
-lands in it, because Hopper's `healthy_reward` of 1.0 is small next to its
-forward reward, so a faster-but-falls gait is locally optimal (reward/step rises
-3.76 -> 4.49 with N while episode length falls 779 -> 368). Humanoid's
-`healthy_reward` of 5.0 aligns speed with survival, and there both rise together.
+Under the original configuration Hopper read 2497 +- 635 / 2140 +- 386 /
+1658 +- 273 / 1605 +- 159 (same metric; those runs were later deleted) -- the
+inverted trend this section used to report as an unexplained failure.
 
 ## 4. Hypotheses tested and refuted
 
@@ -245,8 +245,9 @@ original configuration, so they keep it.
 | `eta` | 1.0 | same | not specified anywhere; 1.0 = take the ADMM step unscaled |
 | `--on-invalid-step` | skip | same | Algorithm 1 has no fallback when (sum g_i)^T y <= 0 |
 
-Report runs: Swimmer and Humanoid `{env}-N{1,2,4,8}-s{0..4}` (the code defaults);
-Hopper `final-hopper-N{1,2,4,8}-s{0..4}` (launched by `final_sweep.sh`).
+Final runs: Swimmer and Humanoid `{env}-N{1,2,4,8}-s{0..4}` (the code defaults,
+launched by `run_sweep.sh`); Hopper `final-hopper-N{1,2,4,8}-s{0..4}` (launched by
+`final_sweep.sh`).
 
 ### Commands
 
@@ -263,27 +264,31 @@ fedrl-train-admm --env hopper --num-agents 1 --seed 0 --device cpu \
   --no-line-search --no-obs-normalization --no-reward-normalization \
   --no-advantage-normalization --log-std-min -20 --log-std-max 20 \
   --eval-interval 25 --eval-episodes 10 --save-checkpoint --run-id <id>
-
-# plain TRPO baseline (sibling project /mnt/edoardo/NPG), same settings
-npg-train --env hopper --seed 0 --device cuda:0 \
-  --eval-interval 25 --eval-episodes 10 --save-checkpoint --run-id <id>
 ```
+
+(The plain-TRPO numbers in section 1 come from a separate single-agent TRPO
+implementation that is not part of this repository.)
 
 Swap `--env swimmer|humanoid` (first command) and `--num-agents 1|2|4|8`; Hopper always uses the second command. All runs on CPU: it measured faster than the GPU for every environment, Humanoid included (re-checked 2026-10-07).
 For figures matching the paper, run seeds 0-9 and average with a 95% CI across seeds
 (their Section 5 protocol). Note this smooths the *plotted* curve by ~sqrt(10); it does
 not change the underlying behaviour described in section 3.
 
-## 6. Still open
+## 6. Still open (2026-10-09)
 
-- **N = 8 underperforms N = 1** (~2000 vs 3749 deterministic), inverting the paper's
-  central claim that more agents converge faster and higher. Consensus quality and
-  step size are both ruled out (section 4). The one implemented-but-untested lead is
-  `--advantage-normalization-scope pooled`: advantages are currently normalized
-  *within each agent's own batch* before `g_i` is formed, so `sum_i g_i` weights every
-  agent equally regardless of how informative its rollout was. This is provably inert
-  at N=1 (verified bit-identical) and active only at N>1 -- the right shape for the
-  bug being hunted.
-- `results_exporter` is still a `NotImplementedError` stub (README task iv).
-- The `baselines` package (standard-average FedNPG, FedPPO) is unimplemented, so the
-  paper's Figure 3 comparison cannot be reproduced yet.
+- **Hopper quantization under the Hopper configuration** is running
+  (`./final_sweep.sh hopper-quant`, 30 runs). The current Hopper quantization
+  results use the original configuration.
+- **Humanoid: standard-average FedNPG finishes below FedNPG-ADMM** at N=8
+  (4699 +- 298 against 6329 +- 334), although it computes the exact direction
+  ADMM approximates. Cause not established.
+- **The Hopper mechanism is an account, not a tested result**: the fixed-KL step
+  plus signal normalization explanation fits the isolation table but was not
+  tested in isolation (a step that shrinks as the gradient vanishes would).
+- **The isolation that chose Hopper's configuration is one seed per setting.**
+- The reduced-precision **float** quantization scheme is implemented but never run.
+
+Resolved since the first version of this list: N=8 underperforming N=1 on
+Hopper (cause found, see hopper_agent_scaling_findings.md), pooled advantage
+normalization (tested, worse), and the baselines (standard-average FedNPG and
+FedPPO, both implemented and run).

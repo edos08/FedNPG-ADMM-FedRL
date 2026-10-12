@@ -1,86 +1,65 @@
 # quantization
 
-This is task **(iv)** — the one part of this project that isn't in the
-paper (the paper cites Q-GADMM [9] as related work but runs no
-quantization experiment of its own), so there's no Figure to reproduce
-and check your work against.
+Quantization of the two vectors (`y_i`, `g_i`) each FedNPG-ADMM agent sends to
+the server, and sweeps of performance against bit width. This is not part of
+the original paper, which cites Q-GADMM as related work but runs no
+quantization experiment.
 
-The paper's own limitations section admits it: no communication-efficiency
-trick beyond ADMM itself was explored. This package is that trick.
-
-## Planned contents
+## Contents
 
 ```
 src/quantization/
-├── quantizers.py  # quantization schemes applied to whatever tensor a
-│                  # `common.comms.Channel` sends (y_i, g_i for ADMM;
-│                  # H_i, g_i for the standard baseline). Start with
-│                  # something simple and standard — e.g. uniform stochastic
-│                  # quantization a la QSGD (the paper cites Q-GADMM [9],
-│                  # which does exactly this for ADMM — worth reading before
-│                  # implementing) — before reaching for anything fancier.
-└── sweep.py       # CLI entry point: fedrl-quantize-sweep
-                    # runs the same training loop at multiple bit-widths
-                    # (e.g. 1, 2, 4, 8, 32-bit / no quantization) and
-                    # records: final reward, convergence curve, and actual
-                    # communication bytes at each resolution.
+├── quantizers.py  # the schemes, as Transforms for common.comms.Channel
+└── sweep.py       # CLI: fedrl-quantize-sweep (one run per bit width)
 ```
 
-## Design constraint
+`scripts/run_grid.py` at the repository root runs a full grid of seeds x
+agent counts x bit widths and names runs `<env>-N<n>-s<seed>-q<bits>`.
 
-This package needs only one small, optional, backward-compatible hook into
-`fednpg_admm`: `train()` accepts a `channel_factory` parameter (defaulting
-to the existing, unquantized `common.comms.make_channels_for_agents`),
-used to build the per-agent Channels instead of a hardcoded call.
-Everything about HOW quantization actually works lives entirely in this
-package: it wraps `common.comms.Channel` by passing it a quantizing
-`Transform` — quantize AND dequantize in one round trip, inside the
-transform passed to `Channel(transform=...)`. `Channel.send()` calls that
-transform and returns the (possibly degraded) tensor directly; there is
-no separate `.receive()` step to hook into (see
-`common/comms/channel.py`'s own docstring). If you find yourself editing
-`agent.py`, `server.py`, `fisher.py`, or `cg.py` in `fednpg_admm` to make
-quantization work, the abstraction wasn't used right — fix that instead
-of special-casing here.
+## Schemes
 
-## What "study the performance" should produce for the report
+- `stochastic`: uniform stochastic quantization in the style of QSGD and
+  Q-GADMM, any bit width >= 1. Values are rounded up or down at random with
+  the probability that makes the quantizer unbiased, so the server receives the
+  correct direction in expectation. Uses its own random generator, so runs at
+  different bit widths see the same action-sampling sequence.
+- `float`: reduced-precision floats (native fp16 and fp8, simulated fp4),
+  bit widths in {4, 8, 16, 32}.
 
-At minimum, for each algorithm (FedNPG-ADMM, and ideally the standard
-baseline too, for a fair comparison):
-- reward-vs-iterations curves at each bit-width, overlaid
-- final reward vs. bit-width (single plot, x-axis = bits, y-axis = reward)
-- communication bytes vs. bit-width (to show what you're actually buying
-  with the accuracy loss)
+## How it plugs in
 
-## Installation
-
-```bash
-cd quantization
-pip install -e .
-```
+`fednpg_admm.train()` takes an optional `channel_factory`. This package passes
+one that builds `Channel`s with a quantizing `Transform`, which quantizes and
+dequantizes in one call and declares the bit width actually needed on the wire.
+The server therefore aggregates the degraded vectors, and the byte meter
+counts `d * b / 8` bytes per send. No file of the algorithm itself imports this
+package.
 
 ## Usage
 
 ```bash
-fedrl-quantize-sweep --algo fednpg-admm --env swimmer --scheme stochastic --bits 1,2,4,8,32
-fedrl-quantize-sweep --algo fednpg-admm --env swimmer --scheme float --bits 4,8,16,32
+fedrl-quantize-sweep --env swimmer --scheme stochastic --bits 4,6,8,32
+fedrl-quantize-sweep --env swimmer --scheme float --bits 4,8,16,32
+
+python scripts/run_grid.py --env humanoid --num-seeds 5 --agents 2,4,8 --bits 6,8
+python scripts/run_grid.py --env hopper --num-seeds 1 --agents 8 --bits none,8 --dry-run
 ```
 
-`--scheme` selects the quantization family (see `quantizers.py`):
-`stochastic` (QSGD/Q-GADMM-style uniform stochastic quantization, unbiased,
-any bit-width >= 1) or `float` (real reduced-precision float dtypes —
-native fp16/fp8, a simulated fp4 — restricted to bits in {4, 8, 16, 32}).
+`run_grid.py` forwards any other flag to `fedrl-train-admm`, so a grid can run
+in a non-default configuration (Hopper's, for example: see
+`final_sweep.sh hopper-quant`).
 
 ## Byte accounting: per-tensor metadata is not counted
 
-Dequantizing on the server side needs per-tensor parameters that, in a real
-deployment, would travel with every `g_i` / `y_i` transmission: `t_min` and
-`scale` for `stochastic` (2 × float32 = 64 bits per send), and `scale` for the
-simulated fp4 (32 bits per send). fp16, fp8 and 32-bit sends carry no metadata.
+Dequantizing on the server needs per-tensor parameters that a real deployment
+would send with every transmission: the minimum and the scale for `stochastic`
+(2 x float32, 64 bits per send) and the scale for the simulated fp4 (32 bits).
+The logged bytes are `d * b / 8` per send and exclude this metadata on purpose:
+it adds `64 / (d * b)` of the payload, about 1-3% in the worst case here (1 bit,
+`d` in the thousands) and under 0.5% at 8 bits, which does not change the
+comparison across bit widths. Details: `docs/quantization_report.md` §4.1.
 
-The quantizing transforms report only `bits_per_element = b` to the
-`ByteMeter`, so the logged comm bytes are `d · b / 8` per send and **exclude
-this metadata**. This is deliberate. The overhead is `64 / (d · b)` of the
-payload, about 1–3% at worst (1 bit, `d` in the thousands) and under 0.5% at
-8 bits, so it does not change the bytes-vs-bits comparison. See
-`docs/quantization_report.md` §4.1 for details.
+## Installation
+
+Installed together with the other packages from the repository root; see the
+main [README](../../../README.md#installation).

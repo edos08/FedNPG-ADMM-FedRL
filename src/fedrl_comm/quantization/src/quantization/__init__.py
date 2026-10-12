@@ -1,8 +1,9 @@
 """
-quantization — task (iv): quantize agent->server transmissions, study
-performance vs. quantization resolution. Not in the original paper.
+quantization: quantize the agent->server transmissions of FedNPG-ADMM and
+measure performance against bit width. Not part of the original paper.
 
-Not implemented yet. See quantizers.py, sweep.py.
+quantizers.py holds the schemes (stochastic uniform, reduced-precision
+float); sweep.py is the fedrl-quantize-sweep CLI.
 """
 
 __version__ = "0.1.0"
