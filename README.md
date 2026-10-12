@@ -51,9 +51,10 @@ Table 2). Paper values are from its Table 2, over ten seeds.
   exceeds it on Humanoid (6329 ± 334 against 4699 ± 298). FedPPO sends half as
   much per round as FedNPG-ADMM and finishes below it on Hopper and Humanoid.
 - **Quantization.** At 8 bits, stochastic quantization keeps both the final
-  reward and the faster learning with more agents on Swimmer and Humanoid, for
-  a further 8x less uplink than the paper's 64-bit accounting. At 6 bits
-  Humanoid fails at every agent count.
+  reward (within the seed spread) and the faster learning with more agents on
+  all three environments, for a further 8x less uplink than the paper's 64-bit
+  accounting. At 6 bits Humanoid fails at every agent count; Swimmer and Hopper
+  hold their final reward.
 
 Hopper runs with a reduced configuration: no reward, advantage or observation
 normalization, no line search and no log-std clamp. Swimmer and Humanoid use the

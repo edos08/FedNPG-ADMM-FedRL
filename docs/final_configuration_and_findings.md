@@ -274,11 +274,8 @@ For figures matching the paper, run seeds 0-9 and average with a 95% CI across s
 (their Section 5 protocol). Note this smooths the *plotted* curve by ~sqrt(10); it does
 not change the underlying behaviour described in section 3.
 
-## 6. Still open (2026-10-09)
+## 6. Still open (2026-10-12)
 
-- **Hopper quantization under the Hopper configuration** is running
-  (`./final_sweep.sh hopper-quant`, 30 runs). The current Hopper quantization
-  results use the original configuration.
 - **Humanoid: standard-average FedNPG finishes below FedNPG-ADMM** at N=8
   (4699 +- 298 against 6329 +- 334), although it computes the exact direction
   ADMM approximates. Cause not established.
@@ -288,7 +285,11 @@ not change the underlying behaviour described in section 3.
 - **The isolation that chose Hopper's configuration is one seed per setting.**
 - The reduced-precision **float** quantization scheme is implemented but never run.
 
-Resolved since the first version of this list: N=8 underperforming N=1 on
+Resolved since the first version of this list: Hopper quantization under the
+Hopper configuration (`./final_sweep.sh hopper-quant`, 30 runs, finished; final
+reward at 8 bits 2052 +- 389 / 2197 +- 533 / 2581 +- 466 and at 6 bits
+1941 +- 461 / 2096 +- 243 / 2590 +- 338 for N=2/4/8, against 1636 / 2536 / 2656
+unquantized; see docs/quantization_report.md section 8), N=8 underperforming N=1 on
 Hopper (cause found, see hopper_agent_scaling_findings.md), pooled advantage
 normalization (tested, worse), and the baselines (standard-average FedNPG and
 FedPPO, both implemented and run).

@@ -291,9 +291,9 @@ per seed, poi media ± deviazione standard campionaria sui 5 seed.
 | Humanoid | 2 | 3391 ± 796 | 2956 ± 593 | 497 ± 34 |
 | Humanoid | 4 | 5343 ± 121 | 5244 ± 237 | 676 ± 73 |
 | Humanoid | 8 | 6329 ± 334 | 5997 ± 259 | 1514 ± 526 |
-| Hopper (config. originale) | 2 | 2140 ± 386 | 1901 ± 593 | 1573 ± 817 |
-| Hopper (config. originale) | 4 | 1658 ± 273 | 1755 ± 302 | 1853 ± 551 |
-| Hopper (config. originale) | 8 | 1605 ± 159 | 1713 ± 150 | 1837 ± 248 |
+| Hopper | 2 | 1636 ± 282 | 2052 ± 389 | 1941 ± 461 |
+| Hopper | 4 | 2536 ± 116 | 2197 ± 533 | 2096 ± 243 |
+| Hopper | 8 | 2656 ± 286 | 2581 ± 466 | 2590 ± 338 |
 
 - **8 bit**: indistinguibile da 64 bit su Swimmer; su Humanoid entro circa una
   deviazione standard. Più agenti continuano ad apprendere più in fretta a ogni
@@ -314,11 +314,16 @@ lavoro che regge ovunque: **8 bit**.
 
 ### 8.3 Hopper
 
-Tutti i run Hopper qui sopra usano la configurazione *originale*, mentre i run
-Hopper finali (`final-hopper-*`) usano quella ridotta (normalizzazioni,
-line search e clamp disattivati; vedi `docs/hopper_agent_scaling_findings.md`).
-Nella configurazione originale la quantizzazione a 6 e 8 bit non cambia nulla
-oltre la variabilità tra seed, e riproduce il trend invertito di quella
-configurazione. La griglia Hopper nella configurazione ridotta è in corso
-(`./final_sweep.sh hopper-quant`, risultati in `results/hopper-quant/`).
+I run Hopper usano la configurazione ridotta di Hopper (normalizzazioni,
+line search e clamp disattivati; vedi `docs/hopper_agent_scaling_findings.md`),
+sia quantizzati (`./final_sweep.sh hopper-quant`, `results/hopper-quant/`) sia
+non quantizzati (`final-hopper-*`), con gli stessi seed.
+
+- A N=8 entrambe le larghezze restano entro la variabilità tra seed del run non
+  quantizzato (2581 e 2590 contro 2656); a 6 bit non c'è il crollo di Humanoid.
+- A N=4 entrambe finiscono più in basso (2197 e 2096 contro 2536): circa una
+  deviazione standard a 8 bit, di più a 6. A N=2 finiscono più in alto.
+- Il reward finale cresce con N a entrambe le larghezze (8 bit: 2052/2197/2581;
+  6 bit: 1941/2096/2590), quindi lo scaling con il numero di agenti regge.
+  Ritorno smussato all'iterazione 100 a 8 bit: 857/914/1195 per N=2/4/8.
 
